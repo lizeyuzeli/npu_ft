@@ -1,0 +1,32 @@
+ 
+****************************************
+Report : area
+Design : mt_sh0
+Version: W-2024.09-SP1
+Date   : Sun Nov 22 15:12:58 2026
+****************************************
+
+Information: Updating design information... (UID-85)
+Warning: Design 'mt_sh0' contains 1 high-fanout nets. A fanout number of 1000 will be used for delay calculations involving these nets. (TIM-134)
+Library(s) Used:
+
+    tcbn12ffcllbwp6t16p96cpdffgnp0p88v0c (File: /home/tools/tech_lib/tsmc12/tmp/tcbn12ffcllbwp6t16p96cpdffgnp0p88v0c.db)
+
+Number of ports:                         9254
+Number of nets:                        238889
+Number of cells:                       229637
+Number of combinational cells:         225540
+Number of sequential cells:              4096
+Number of macros/black boxes:               0
+Number of buf/inv:                      43337
+Number of references:                       1
+
+Combinational area:              40877.310657
+Buf/Inv area:                     6063.243478
+Noncombinational area:            3170.893799
+Macro/Black Box area:                0.000000
+Net Interconnect area:      undefined  (Wire load has zero net area)
+
+Total cell area:                 44048.204456
+Total area:                 undefined
+1

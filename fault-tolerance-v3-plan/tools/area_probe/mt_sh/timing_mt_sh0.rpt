@@ -1,0 +1,70 @@
+ 
+****************************************
+Report : timing
+        -path full
+        -delay max
+        -max_paths 1
+Design : mt_sh0
+Version: W-2024.09-SP1
+Date   : Sun Nov 22 15:13:05 2026
+****************************************
+
+ # A fanout number of 1000 was used for high fanout net computations.
+
+Operating Conditions: ffgnp0p88v0c   Library: tcbn12ffcllbwp6t16p96cpdffgnp0p88v0c
+Wire Load Model Mode: segmented
+
+  Startpoint: readMtIdx[2][1][2]
+              (input port clocked by clk)
+  Endpoint: parErr (output port clocked by clk)
+  Path Group: clk
+  Path Type: max
+
+  Des/Clust/Port     Wire Load Model       Library
+  ------------------------------------------------
+  mt_sh0             ZeroWireload          tcbn12ffcllbwp6t16p96cpdffgnp0p88v0c
+  mt_shadow_probe_FOLD0
+                     ZeroWireload          tcbn12ffcllbwp6t16p96cpdffgnp0p88v0c
+
+  Point                                                   Incr       Path
+  --------------------------------------------------------------------------
+  clock clk (rise edge)                                   0.00       0.00
+  clock network delay (ideal)                             0.00       0.00
+  input external delay                                    0.20       0.20 r
+  readMtIdx[2][1][2] (in)                                 0.00       0.20 r
+  u/readMtIdx[2][1][2] (mt_shadow_probe_FOLD0)            0.00       0.20 r
+  u/U158444/ZN (INVD1BWP6T16P96CPD)                       0.00       0.20 f
+  u/U204400/Z (AN2D1BWP6T16P96CPD)                        0.01       0.22 f
+  u/U204405/Z (AN2D1BWP6T16P96CPD)                        0.01       0.23 f
+  u/U128657/Z (BUFFD2BWP6T16P96CPD)                       0.01       0.24 f
+  u/U17161/Z (BUFFD2BWP6T16P96CPD)                        0.01       0.25 f
+  u/U6901/Z (BUFFD2BWP6T16P96CPD)                         0.01       0.26 f
+  u/U339/Z (BUFFD2BWP6T16P96CPD)                          0.02       0.28 f
+  u/U206023/ZN (AOI22D1BWP6T16P96CPD)                     0.01       0.29 r
+  u/U206024/ZN (ND4D1BWP6T16P96CPD)                       0.02       0.31 f
+  u/U206025/Z (OR2D1BWP6T16P96CPD)                        0.01       0.32 f
+  u/U207263/ZN (AOI22D1BWP6T16P96CPD)                     0.01       0.33 r
+  u/U207264/ZN (ND4D1BWP6T16P96CPD)                       0.02       0.35 f
+  u/U207265/Z (OR2D1BWP6T16P96CPD)                        0.01       0.36 f
+  u/U137642/Z (XOR3D1BWP6T16P96CPD)                       0.03       0.40 f
+  u/U153148/ZN (NR4D1BWP6T16P96CPD)                       0.01       0.41 r
+  u/U158436/ZN (ND4D1BWP6T16P96CPD)                       0.02       0.43 f
+  u/U158434/ZN (AOI22D1BWP6T16P96CPD)                     0.01       0.44 r
+  u/U158440/ZN (ND4D1BWP6T16P96CPD)                       0.02       0.45 f
+  u/U158438/Z (OR2D1BWP6T16P96CPD)                        0.01       0.47 f
+  u/parErr (mt_shadow_probe_FOLD0)                        0.00       0.47 f
+  parErr (out)                                            0.00       0.47 f
+  data arrival time                                                  0.47
+
+  clock clk (rise edge)                                   1.00       1.00
+  clock network delay (ideal)                             0.00       1.00
+  output external delay                                  -0.20       0.80
+  data required time                                                 0.80
+  --------------------------------------------------------------------------
+  data required time                                                 0.80
+  data arrival time                                                 -0.47
+  --------------------------------------------------------------------------
+  slack (MET)                                                        0.33
+
+
+1

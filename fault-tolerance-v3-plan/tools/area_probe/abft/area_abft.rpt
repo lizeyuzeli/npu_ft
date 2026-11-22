@@ -1,0 +1,31 @@
+ 
+****************************************
+Report : area
+Design : abft_int_probe
+Version: W-2024.09-SP1
+Date   : Sun Nov 22 14:38:07 2026
+****************************************
+
+Information: Updating design information... (UID-85)
+Library(s) Used:
+
+    tcbn12ffcllbwp6t16p96cpdffgnp0p88v0c (File: /home/tools/tech_lib/tsmc12/tmp/tcbn12ffcllbwp6t16p96cpdffgnp0p88v0c.db)
+
+Number of ports:                        31195
+Number of nets:                         77177
+Number of cells:                        43794
+Number of combinational cells:          43103
+Number of sequential cells:               362
+Number of macros/black boxes:               0
+Number of buf/inv:                       5663
+Number of references:                     378
+
+Combinational area:               9345.355921
+Buf/Inv area:                      451.325967
+Noncombinational area:             286.359550
+Macro/Black Box area:                0.000000
+Net Interconnect area:      undefined  (Wire load has zero net area)
+
+Total cell area:                  9631.715471
+Total area:                 undefined
+1

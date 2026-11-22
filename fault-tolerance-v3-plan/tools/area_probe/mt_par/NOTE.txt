@@ -1,0 +1,1 @@
+killed at ~55min: did not converge (TNS large, area ~541k at 1GHz with 0.2ns IO delays); in-array parity estimated by ratio instead, see 04 §4.5
