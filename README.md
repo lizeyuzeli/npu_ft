@@ -7,6 +7,7 @@
 - v2 回顾、v3 方案取舍和关键版本见 [v3 规划与文档索引](fault-tolerance-v3-plan/README.md)。
 - 指令复制、结果比较、重放机制与注错实验见 [RVV 容错实现与验证](fault-tolerance-v3-plan/03-rvv-implementation.md)。
 - Tile 存储保护、矩阵乘阵列校验与 RVV/VME 共用错误上报的候选方案见 [VME 容错设计](fault-tolerance-v3-plan/04-vme-ft-design.md)。
+- 仿真实测结果和波形摘录见 [测试数据](test-data/README.md)。
 - CoralNPU 分支的 rebase、冲突处理和验证结果见 [上游同步记录](fault-tolerance-v3-plan/rebase-log.md)。
 - 面积分析脚本、综合探测用的 RTL 和 Tcl、面积与时序报告，以及 VCS 编译辅助脚本见 [工具与实验材料](fault-tolerance-v3-plan/tools/)。课题使用的论文存放在 [参考文献](reference/)。
 
