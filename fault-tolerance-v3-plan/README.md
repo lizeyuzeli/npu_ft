@@ -1,48 +1,87 @@
-# fault-tolerance-v3 规划
+# fault-tolerance-v3-plan 总览
 
-基于 CoralNPU 的容错设计（硕士毕业课题）第三版。v3 分支从 main@`9d0a8dcf` 开出，
-目标是在新的 main（新增 VME/Zvt、ROB 16 项、rob_tag、CoralFlow 等）上，
-**批判性地继承** v2（`fault-tolerance-v2`，tip `631c3ae1`）的工作。
+## 课题定位
 
-## 文档索引
+在 CoralNPU（RISC-V 标量核 + RVV 1.0 向量扩展 + 自研 VME 矩阵扩展）上实现低开销容错，目标是把 SDC（Silent Data Corruption）变成 DUE（Detected Unrecoverable Error）或 CORRECTED，最终通过门级注错量化覆盖率和开销。
 
-| 文件 | 内容 | 状态 |
-|---|---|---|
-| [01-v2-review.md](01-v2-review.md) | v2 回顾与 main 变化汇总：v2 做了什么（技术分析）+ main 变了什么（与 FT 相关的部分）+ 迁移难度评估 | 完成（2026-11-21，整合原 01/02/03） |
-| [02-direction-discussion.md](02-direction-discussion.md) | 第 1 步方向讨论。R1～R5 五轮讨论：低开销定位、replay_mem DC 实测、零开销插空模式、宏定义、上报路径、流控分析 | R5，待确认第 1 步收尾（2026-11-21） |
-| [rebase-log.md](rebase-log.md) | 专门记录每次与官方 main 同步的 rebase 过程（冲突解决、验证结果），不参与整体开发流程序号 | 当前 base: f385a31b |
-| [tools/](tools/) | 面积解析脚本（area.py / group.py）和 DC 面积探测（area_probe/：replay_mem 结构��比、比较器、按真实位宽综合） | — |
-| [03-rvv-implementation.md](03-rvv-implementation.md) | RVV 容错的实现和功能验证记录 | 完成（2026-11-21）：FULL 模式，复制/比较/重放已验证；trap 最后一段推迟到 VME 阶段；OPPORTUNISTIC 不做 |
-| [04-vme-ft-design.md](04-vme-ft-design.md) | VME 容错：联网调研 + 方案讨论（含 RVV/VME 共用的 trap 上报修复） | R1（2026-11-22），待确认 §6 的 Q1～Q10 |
+## v3 阶段划分
 
-## 一页结论（截至 R5）
+| 阶段 | 文档 | 职责 | 当前状态 |
+|---|---|---|---|
+| 回顾 | [01-v2-review.md](01-v2-review.md) | v2 的结论、遗留问题、为什么要推倒重来 | ✅ 完成（R1） |
+| 方向 | [02-direction-discussion.md](02-direction-discussion.md) | v3 的机制选择、开销目标、验证策略 | ✅ 完成（R6） |
+| RVV 实现 | [03-rvv-implementation.md](03-rvv-implementation.md) | RVV 冗余比较 + 重放纠错的功能级实现和 RTL 注错验证 | ✅ 完成（M1-M5） |
+| VME 方案 | [04-vme-ft-design.md](04-vme-ft-design.md) | VME 容错的方案讨论、调研、决策记录、交给 05 的输入 | ✅ 完成（R2，2026-11-26） |
+| VME 实现 | 05-vme-implementation.md（待建） | VME 容错的功能级实现和 RTL 注错验证，分两阶段 | 📋 下一步 |
+| 06 以后 | 待定 | 综合、功耗、性能、网表注错、存储层、LSU trap 修复 | 📋 候选 |
 
-**定位：NPU 低开销容错。** 基准论文（Barbirotta 2024）只是参考之一，指标只做粗估，最终以论证低开销为准。
+## 文档更新规则
 
-**RVV 指令冗余方案定稿：**
-- copy-2 和重放统一经 replay_mem 发射，只用 dispatch 当拍不用的 push 端口，不直接阻塞 dispatch。
-- replay_mem 采用"3 写 4 读"，实测约 2.6% 芯片面积（按 12nm 真实位宽）。
-- 默认用 FULL 模式；OPPORTUNISTIC（插空）作为实验对照，放弃窗口内未发 copy-2，不重放时零开销。
-- 保留完整比较，trap 重试、小容量池、签名比较都不做。
+- **轮次**：在文件内原地修订（R1、R2、M1、M5…），修订记录写在文件开头的表格里。
+- **决策记录**：讨论结果、取舍理由、已知风险都写在对应文档里，作为后续的输入。
+- **代码改动不在这里**：只跟踪方案和验证数据，代码提交走正常的 git 流程。
 
-**宏定义：** `RVV_FT_ON` / `RVV_FT_MODE` / `RVV_FT_WATERMARK` / `RVV_FT_RETRY_MAX` / `RVV_FT_INJECT_ON`（RTL 注错备用）。VME 的宏用 `VME_FT_` 前缀。
+## 各文档职责
 
-**上报路径：** 完全复用现有通路（ROB → RvvCore trap → 标量异常 mcause=2 → ebreak → io.fault），不改 Chisel。
+### 01-v2-review.md
+- **跟踪**：v2 做了什么、遗留了什么问题、为什么推倒。
+- **不跟踪**：v3 的具体方案（那是 02 以后的事）。
 
-**v2 最值得继承的是方法论，不是代码。** FI 框架的划分规则、下降沿注入、正反对照、审计工具、hang 归因，以及"每个检测器都配一个故意失败模式"的纪律，都可以原样保留。RTL 和 Chisel 代码因为 main 的变化，基本都要按新结构重写。
+### 02-direction-discussion.md
+- **跟踪**：RVV 和 VME 分别用什么机制、为什么这样选、开销目标、验证策略（RTL 注错 → 门级注错）。
+- **不跟踪**：具体实现细节（那是 03/05 的事）。
 
-**main 带来的新机会：**
-- 仓库里现成的 SECDED(39,32) 实现和金模型，可以用于 VRF / tile ECC。
-- OpenROAD/ASAP7 开源物理流程，可以量化开销，也可以作为网表级 SET 注入的切入点。
-- UVM 三方协同仿真加 ISG 随机指令流，可以证明 FT 在架构上不可见。
-- 矩阵乘 PE 阵列适合做 ABFT，可能成为论文的创新点。
+### 03-rvv-implementation.md
+- **跟踪**：RVV FT 的实现记录（M1-M5）、RTL 注错结果、已知问题。
+- **不跟踪**：方向讨论（已在 02 定）、VME 的事（那是 04/05）。
 
-## 关键版本锚点
+### 04-vme-ft-design.md
+- **跟踪**：VME 容错方案的讨论、决策记录、调研结论、R1 和 R2 的面积探测数据、交给 05 的输入（实现拆分、验证项）。
+- **不跟踪**：具体实现过程（那是 05 的事）、综合/功耗/性能（那是 06 的事）。
+- **R1 → R2 的变化**：主方案从"ABFT + tile 奇偶"改为"交错时间复制 + 部分提交 + RS 当 ROB"。
 
-| 名称 | 提交 | 日期 |
-|---|---|---|
-| v1 `zeyu/fault-tolerance` | `af20a24f`（base `7d0ae209`） | 2026-06-07 |
-| v2 分叉点（main） | `1126ed3f` | 2026-07-31 |
-| v2 tip | `631c3ae1` | 2026-08-24 |
-| v3 起点 = 当前 main | `9d0a8dcf` | 2026-11（最新提交日期 11-13） |
+### 05-vme-implementation.md（待建）
+- **跟踪**：VME FT 的实现记录、第一阶段（核心机制）和第二阶段（写入校验、RS 奇偶）各自的 RTL 注错结果。
+- **不跟踪**：方案讨论（已在 04 定）、综合/网表注错（那是 06 的事）。
 
+### rebase-log.md
+跟踪 rebase 到上游 main 的记录：日期、commit、冲突文件、解决方式。
+
+### tools/
+- `tools/area_probe/`：DC 面积探测脚本（`abft_int_probe.sv`、`mt_shadow_probe.sv`）和报告。
+- `tools/ft_compile`：FT 构建包装脚本（见 03 M1）。
+
+### test-data/（仓库根目录）
+- `test-data/rvv/`：03 的 RTL 注错结果（FI 覆盖率表、CSV）。
+- `test-data/vme/`：已有的 VME GEMM 负载实测数据（kernel patch 还没归档）。
+
+## 通用约定
+
+1. **宏传递**：通过构建参数（`--define`）传入，不在上游 `.svh` 里加 `define`。
+2. **面积口径**：按"占 VME / 占全芯片"两个口径报。全芯片按 618,024 µm²（VmeCoreMiniAxi DC 综合）算，VME 按 343,000 µm² 算。
+3. **轮次标记**：R=revision（方案讨论），M=milestone（实现）。
+4. **注错分类**：MASKED、CORRECTED、DETECTED、SDC，按 Leveugle 2009 的定义。
+
+## 一页结论（截至 04 R2，2026-11-26）
+
+### RVV（03 完成）
+- **机制**：指令级冗余比较（EVEN/ODD）+ 重放纠错，replay_mem 2.4 Kbit。
+- **开销**：约 2.6% 全芯片面积（replay_mem + 控制），性能开销 ≤2%（实测负载）。
+- **覆盖率**：VEU 通路约 86%、VRF 约 5%，共约 20% 全芯片（按面积）。
+- **验证**：Verilator 和 VCS 上通过 rvv_arithmetic（25 用例）和 tfmicro（6 模型）；RTL 注错 FI 覆盖率 97.9%（4000 次采样，e=1%）。
+
+### VME（04 R2 方案确定）
+- **机制**：按组交错的时间复制（g0p0 g0p1 g1p0 g1p1…）+ 按元素部分提交 + RS 当 ROB 回滚。
+- **开销**（估算，06 实测）：
+  - 第一阶段（核心）：约 1% 全芯片（dupBuf 2.4 Kbit + done 掩码 256 bit + RS 加深到 12 + 控制）；
+  - 第二阶段（写入校验 + RS 奇偶）：约 0.9%；
+  - 合计约 2% 全芯片。
+- **覆盖率**：PE 阵列 161k、读网络 70k、写网络 70k（第二阶段）、发射/控制逻辑，按面积约 88% VME。
+- **不覆盖**：MT 存储寄存器 34k、FT 自身、永久故障（延后到 06）。
+- **性能**（估算）：LSU 受限负载约 0；PE 打满时 8 拍/条（原设计 4 拍）；每条退休约晚 7 拍；每次回滚约 30 拍。
+- **验证**：05 做 RTL 注错（vme_test 20 用例 + 定向测试），trap 只在 L1 观测（LSU trap 修复延后到 06）。
+
+### 延后到 06
+- 存储层（MT 寄存器）：影子奇偶 / 阵列内奇偶 / 运行校验和三选一，R1 面积数据见 04 附录。
+- LSU trap 卡死修复（改 Lsu.scala）。
+- 综合、功耗、性能实测、网表注错。
