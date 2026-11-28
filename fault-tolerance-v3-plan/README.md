@@ -12,7 +12,7 @@
 | 方向 | [02-direction-discussion.md](02-direction-discussion.md) | v3 的机制选择、开销目标、验证策略 | ✅ 完成（R6） |
 | RVV 实现 | [03-rvv-implementation.md](03-rvv-implementation.md) | RVV 冗余比较 + 重放纠错的功能级实现和 RTL 注错验证 | ✅ 完成（M1-M5） |
 | VME 方案 | [04-vme-ft-design.md](04-vme-ft-design.md) | VME 容错的方案讨论、调研、决策记录、交给 05 的输入 | ✅ 完成（R2，2026-11-26） |
-| VME 实现 | 05-vme-implementation.md（待建） | VME 容错的功能级实现和 RTL 注错验证，分两阶段 | 📋 下一步 |
+| VME 实现 | [05-vme-implementation.md](05-vme-implementation.md) | VME 容错的功能级实现和 RTL 注错验证，分两阶段 | 🔄 进行中（M3 诊断基线完成，2026-12-04） |
 | 06 以后 | 待定 | 综合、功耗、性能、网表注错、存储层、LSU trap 修复 | 📋 候选 |
 
 ## 文档更新规则
@@ -40,7 +40,7 @@
 - **不跟踪**：具体实现过程（那是 05 的事）、综合/功耗/性能（那是 06 的事）。
 - **R1 → R2 的变化**：主方案从"ABFT + tile 奇偶"改为"交错时间复制 + 部分提交 + RS 当 ROB"。
 
-### 05-vme-implementation.md（待建）
+### [05-vme-implementation.md](05-vme-implementation.md)
 - **跟踪**：VME FT 的实现记录、第一阶段（核心机制）和第二阶段（写入校验、RS 奇偶）各自的 RTL 注错结果。
 - **不跟踪**：方案讨论（已在 04 定）、综合/网表注错（那是 06 的事）。
 
