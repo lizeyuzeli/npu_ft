@@ -4,7 +4,7 @@
 > 第一阶段是核心机制（`VME_FT_ON`）；第二阶段是写入校验（`VME_FT_WCHK_ON`）和 RS 奇偶（`VME_FT_RSPAR_ON`），每项可单独叫停。
 > 方案、宏定义、验证项、不做的事项以 04 为准（§4.1～4.3、§6）；本文件只记实现过程、测试结果和与 04 假设不符的地方。
 > 分支：`fault-tolerance-v3`，起点 `29a4e555`（RVV FT）。
-> 状态（2026-11-29）：**M7 已交付，05 待独立签收**。第一阶段（M1～M5）已独立签收，主线签收快照 `57de0885` 与实跑提交 `ed5cd672` 的 Git 文件树完全相同（§10.8 验收简表，§11 提交映射和历史资料索引）。M7 专用 RS 负载奇偶保护的候选提交为 `bb8e529c`，实施与验收记录见 §12。M6 写入校验与重写留作后续优化候选。
+> **2026-11-29 独立签收，05 结项。** M1～M5 主线提交 `7f1b3405` 对应实跑提交 `ed5cd672`（§10、§11）。M7 专用 RS 负载奇偶保护主线提交 `58325904` 对应实跑提交 `bb8e529c`（§12.10）。两组提交各自的 Git 文件树完全相同。M6 写入校验与重写留作后续优化候选。
 > §3～§8 记录的单在飞门控、回滚清 mtInfo、`blk_complete_simple` 等过渡机制已被 §9 替换；§9 中重试上限（第 RETRY_MAX+1 次失败才 trap）、trap 合并、§9.8 简表和 `31f5f487` 日志目录已被 §10 订正，结论以 §10 为准。
 
 ## 里程碑
@@ -17,7 +17,7 @@
 | M4 | 回滚、重试、trap 事件；单条 PE 在飞模式下注错测试通过 | **完成** |
 | M5 | 恢复指令重叠、持续注错 trap 验证、第一阶段其余 §6.3 验收项（§9；签收收尾 §10） | **完成**（`ed5cd672`） |
 | M6 | 第二阶段：`VME_FT_WCHK_ON` | 延后，后续优化候选 |
-| M7 | 第二阶段：`VME_FT_RSPAR_ON` | **已交付**（`bb8e529c`，§12），待独立签收 |
+| M7 | 第二阶段：`VME_FT_RSPAR_ON` | **已独立签收**（主线 `58325904`，实跑 `bb8e529c`，§12.10） |
 
 M2～M7 的划分是暂定的，做到时按实际情况调整。每个里程碑完成后确认再进下一个。
 
@@ -34,7 +34,7 @@ M2～M7 的划分是暂定的，做到时按实际情况调整。每个里程碑
 
 ### 0.2 第二阶段
 
-2026-11-29 确定 05 收尾范围：实施 04 §4.2 第 2 项。M7 校验首次读取、p0/p1 之间以及重放或 misc 读取时的 RS 负载。验收保留关宏注错的 SDC 对照，核对开宏后的 L1 trap 和指令归属，并复核第一阶段正常重叠、恢复和退休。执行方记录最终候选及原始日志，独立复核通过后关闭 05。04 §4.2 第 1 项的写分发校验、重写及相关注错留到有优化需求时另行立项。
+2026-11-29 确定 05 收尾范围：实施 04 §4.2 第 2 项。M7 校验首次读取、p0/p1 之间以及重放或 misc 读取时的 RS 负载。验收保留关宏注错的 SDC 对照，核对开宏后的 L1 trap 和指令归属，并复核第一阶段正常重叠、恢复和退休。最终候选的原始日志及独立签收结论见 §12。04 §4.2 第 1 项的写分发校验、重写及相关注错留到有优化需求时另行立项。
 
 ### 0.3 范围约定
 
@@ -1660,15 +1660,15 @@ MISMATCH+DRAIN cyc=416 head_tag=4 retry=0
 
 ### 11.1 主线保留的代码快照
 
-| 用途 | 原实验提交 | 整理后的提交 |
-|---|---|---|
-| 单在飞、FT 开关回归基线 | `531c1667` | `531c1667` |
-| 单在飞重放和老退休记录保护 | `90753444` | `d935f599` |
-| 四 block 精确完成、跨尝试提交检查和 12 拍基线 | `84028c04` | `3b5c0ded` |
-| 多指令重叠、按序提交和重放 | `31f5f487` | `9f7a56ce` |
-| 异常边界修复与最终签收 | `ed5cd672` | `57de0885` |
+| 用途 | 原实验提交 | 第一次整理 | 当前主线 |
+|---|---|---|---|
+| 单在飞、FT 开关回归基线 | `531c1667` | `531c1667` | `ed812edc` |
+| 单在飞重放和老退休记录保护 | `90753444` | `d935f599` | `b63c5232` |
+| 四 block 精确完成、跨尝试提交检查和 12 拍基线 | `84028c04` | `3b5c0ded` | `f7a26f89` |
+| 多指令重叠、按序提交和重放 | `31f5f487` | `9f7a56ce` | `43fe0dc6` |
+| 异常边界修复与最终签收 | `ed5cd672` | `57de0885` | `7f1b3405` |
 
-各行新旧提交的 Git tree ID 相同。随后内层提交 `b0dc9a4d` 移出六份历史 Markdown 报告。生产 RTL、BUILD、测试源码和测试数据与签收快照逐文件相同。外层设计节点保留 `75d4123`；§3～§8 的原记录 `7686592` 对应 `86fdc973`，最终 §10 原记录 `4ac2bc0` 对应 `93777426`。原始运行继续用当时的提交号标识。
+同一行三个提交的 Git tree ID 相同。内层 `2460906e`（原 `b0dc9a4d`）仅移出六份历史报告。外层的设计修订、§3～§8 记录、§10 验收记录在当前主线分别是 `791584ef`、`dae6895a`、`59c2b613`，其原始节点分别为 `75d4123`、`7686592`、`4ac2bc0`。两仓在本地各自保留了英文重写前的分支引用 `refs/archive/vme-pre-reword/<分支名>`。原始运行和归档目录沿用实跑 SHA。
 
 ### 11.2 历史诊断资料
 
@@ -1684,17 +1684,18 @@ MISMATCH+DRAIN cyc=416 head_tag=4 retry=0
 
 ## 12. M7：RS 负载奇偶保护（`VME_FT_RSPAR_ON`，2026-11-29）
 
-**代码提交**（内层仓库 `fault-tolerance-v3`，在 `b0dc9a4d` 之上）：
+内层 `fault-tolerance-v3` 分支的 M7 提交记录如下。
 
 | 提交 | 内容 |
 |---|---|
-| `bb8e529c` | RTL、注错点、测试和 BUILD 一次提交（**候选提交**，下文所有运行都在此提交上） |
+| `bb8e529c` | 实跑提交，含 RTL、注错点、测试和 BUILD。下文日志均按此 SHA 归档。 |
+| `58325904` | 当前主线签收提交，与实跑提交共享 Git 文件树 `cd9f5a1aa0536acd0942d7c58ff09cd53556fbcf`。 |
 
 **原始日志**：`/home/lizeyu/eng/npu_ft/test-data/vme-ft-m7-bb8e529c/`（不入库，已加入外层 `.gitignore`，下文路径相对此目录）。`run_head.txt` 记 HEAD、工作区和运行时间；`final_regression_bb8e529c.txt` 是 61 个目标一次 `bazel test --nocache_test_results` 的完整输出，目标清单在 `targets.txt`。每个目标一个目录，分 shard 的保留 `shard_k_of_n/`；`test.log` 是整次仿真输出，`test.outputs/<case>.log` 是该用例的事件切片。正例在回归结束后立即收集，之后才跑负对照；负对照单放 `neg/<变异名>/`（`mutation.diff`、`bazel_summary.txt` 和该次运行的日志）。RS 参考模型随机测试在 `rs_unit/`（VCS，命令在 `rs_unit/cmd.txt`）。
 
 ### 12.1 保护范围、奇偶生成与检查
 
-**保护字段**：RS 表项存的整个 `ZVT_RS_t`，不挑字段。本配置下为 372 bit（`[VME_FT_CFG] rspar=1 payload_bits=372 parity_groups=12`），包括 rob_tag、rob_entry、funct6/funct3、vs2 号、is_lsu/is_store、vstart、altfmt、mtwiden、tm、vl、tk、sew、eew_mt、rndMode、tss、vs1_data、vs2_data、dst_index、first/last_uop_valid、uop_index；定义 `TB_SUPPORT` 时还包括 uop_pc。每 32 bit 一组偶校验，共 11 个整组和 1 个 20 bit 尾组，每项 12 位奇偶。另存 4 bit rob_tag 副本（理由见下文 trap 归属）。每项共 16 bit，深度 12 时为 192 个触发器。04 §4.2 估的“每个 uop 约 10 bit”按的是旧位宽，实际 12 位，另加 tag 副本。
+**保护字段**：RS 表项存的整个 `ZVT_RS_t`，不挑字段。本配置下为 372 bit（`[VME_FT_CFG] rspar=1 payload_bits=372 parity_groups=12`），包括 rob_tag、rob_entry、funct6/funct3、vs2 号、is_lsu/is_store、vstart、altfmt、mtwiden、tm、vl、tk、sew、eew_mt、rndMode、tss、vs1_data、vs2_data、dst_index、first/last_uop_valid、uop_index；定义 `TB_SUPPORT` 时还包括 uop_pc。每 32 bit 一组偶校验，共 11 个整组和 1 个 20 bit 尾组，每项 12 位奇偶。另存 4 bit rob_tag 副本（理由见下文 trap 归属）。该 RTL 测试配置每项增加 16 bit，深度 12 时共 192 个存储位。物理寄存器数以综合结果为准。04 §4.2 估的“每个 uop 约 10 bit”按的是旧位宽，实际 12 位，另加 tag 副本。
 
 **生成**（`zvt_ft_rs.sv` 写入侧）：多路 push 压缩之后，每个实际写入的表项用 `gen_par(datain_seq[j])` 从 dispatch 交来的 uop 算奇偶，与负载同拍写入 `par_mem` 的同一下标，tag 副本写入 `tag_mem`。奇偶跟着下标走，因此随表项经过压缩、按 DEPTH 取模的指针回绕、发射偏移、回滚（表项不搬动，只是偏移清零）和重放。flush 只复位指针，旧奇偶在下一次 push 时被覆盖。
 
@@ -1714,7 +1715,7 @@ MISMATCH+DRAIN cyc=416 head_tag=4 retry=0
 - `par_trap = par_blk && (off == 0)`，即失败表项是 RS 中最老的，此时没有已发射、未校验、比它更老的指令。`zvt_ft` 收到 `rs_par_trap_i` 且不在 `FT_TRAP` 时进入 `FT_TRAP`，发一拍 `ft_trap_o`，tag 为 `rs_par_tag_i`，优先于 DRAIN/ROLLBACK 的转移。之后走第一阶段同一条通路：`rvv_core_ft_trap_arb` → `trap_valid_o`，哨兵 STORE/全 1。trap 日志增加 `cause=rspar|retry` 字段。
 - 失败表项更年轻时（`off > 0`）只拦不报。更老的指令照常比较、提交、通过、退休，`off` 降到 0 后再报。回滚会把视图带回更老的队头，那条被重发；坏表项仍在其后等待。
 - 与通过不会同拍：`off == 0` 时没有已完整发射、未校验的指令。部分发射的队头（g0p0 已接受）就是这条坏指令本身，trap 抢在它的排空之前报出。
-- 已通过的老指令的退休记录不受影响：L1 trap 带的是年轻指令的 tag，RetirementBuffer 按序先退休老的，再取这个 trap（见 §12.3 年轻用例：L1 trap 在第 426 拍，老指令第 428 拍退休，第 429 拍 flush）。
+- 已通过的老指令的退休记录不受影响：L1 trap 带的是年轻指令的 tag，RetirementBuffer 按序先退休老的，再取这个 trap（见 §12.4 年轻用例：L1 trap 在第 426 拍，老指令第 428 拍退休，第 429 拍 flush）。
 - **rob_tag 来源**：RS 内的 tag 副本 `tag_mem`，push 时取自 dispatch 的 `rs_dp2zvt[k].rob_tag`，与负载分开存放。奇偶只能检测，负载的 tag 组失败时负载里的 tag 不可信。单故障下负载失败时副本必然完好，所以翻位恰好命中 tag 位时 trap 仍归给原指令（§12.4 tag 用例）。副本本身不校验：它被翻时负载完好、不会 trap，副本也就不会被使用（模块级 tag (b)）。存储的奇偶位被翻时，负载完好但检查失败，结果是一次误报 trap，不会产生错误结果（模块级 tag (c)）。
 
 **时序与面积**：未综合。检查位于 RS 视图 → uopVld → canStart/peCmdVld 的组合路径上，代价是 4 个 lane × 12 组 32 输入异或加比较，与 `ft_pass` 组合路径一起留到 06 综合确认（04 §6.5 风险 1）。不能改成打一拍再检查：`rs_mid` 那种在接受 g0p0 的沿上翻位、下一拍就读的情况会漏掉。正常路径节拍不变（§12.5）。
@@ -1783,7 +1784,7 @@ plusarg：`+VME_FT_INJ_SITE=rs|rs_mid`、`+VME_FT_INJ_N=<n>`（rs：第 n 条 PE
 
 - **节拍逐字节不变**：`vme_ft_overlap_verilator` 与 `vme_ft_rspar_overlap_verilator` 的 42 个事件切片（`shard_*/test.outputs/*.log`，含 ISSUE/COMMIT/PASS/HANDSHAKE 的拍号与数据）逐字节相同。异 tile：insn0 g0p0 cyc=408，insn1 g0p0 cyc=416，insn0 PASS cyc=424，insn1 首次写 cyc=425、PASS cyc=432，真重叠。同 tile tm=2/4/6/16：301→307/307/307/309，间隔 6/6/6/8。
 - **恢复逐字节不变**：old_young、retry_ok、trap、trap_fe、young、bskew、dupbuf、dupbuf_addr、done、fp_replay 共 10 个注错目标，开宏 `vme_ft_rspar_inj_*` 与关宏 `vme_ft_inj_*` 的切片相同。old_young 中 insn0 尝试 0/1 提交 255/1 个，insn1 全部来自尝试 1（`vme_ft_rspar_inj_old_young_verilator/test.log`）。trap 在第 3 次失配后 rob_tag=4。trap_fe 中 L1 先 rob_tag=13（前端）后 rob_tag=11（VME）。
-- **官方用例**：`vme_test_ft{,_d8,_inject,_rvvft}` 与对应 `vme_test_ft_rspar*` 都是 20/20，4 个 shard 的仿真时间两两相同，例如 FT/RSPAR 均为 15306.25 / 13890.00 / 12870.00 / 22293.75 ns，RVV FT 同开时均为 15306.25 / 13890.00 / 12897.50 / 22327.50 ns。官方程序发射间隔 `vme_test_ft_rspar_dispatch_interval` 为 246250→253750（6 拍），与关宏相同。
+- **官方用例**：`vme_test_ft{,_d8,_inject,_rvvft}` 与对应 `vme_test_ft_rspar*` 每组都是 21/21（四个 shard 实际通过数依次为 6、5、5、5），4 个 shard 的仿真时间两两相同，例如 FT/RSPAR 均为 15306.25 / 13890.00 / 12870.00 / 22293.75 ns，RVV FT 同开时均为 15306.25 / 13890.00 / 12897.50 / 22327.50 ns。官方程序发射间隔 `vme_test_ft_rspar_dispatch_interval` 为 246250→253750（6 拍），与关宏相同。
 - **宏关**：`vme_test_verilator`（不定义 VME_FT_ON）、`vme_rvvi_retire_test_verilator` 通过。
 - **RVV FT 同开**（`*_rvvft`）：rs_par、rs_mid_par、rs_tag_par、rs_young_par、trap、trap_fe 的切片与不开 RVV FT 时逐字节相同，L1 分别为 rob_tag 4、4、4、5、4、13→11，`source=vme_ft`（trap_fe 先 frontend）。
 
@@ -1819,7 +1820,7 @@ plusarg：`+VME_FT_INJ_SITE=rs|rs_mid`、`+VME_FT_INJ_N=<n>`（rs：第 n 条 PE
 ### 12.8 已知限制
 
 1. **时序**：检查在发射的组合路径上（§12.1），06 综合确认。若不满足，可在 RS 内把奇偶比较拆成逐组预计算，但不能简单打一拍。
-2. **奇偶的固有边界**：同一组内偶数个位翻转检测不到。存储的奇偶位被翻会误报 trap（不产生错误结果）。tag 副本不校验（单故障下不影响归属，§12.1）。
+2. **奇偶的固有边界**：同一组内偶数个位翻转检测不到。存储的奇偶位被翻会误报 trap（不产生错误结果）。RTL 中单独翻转 tag 副本时，指令仍以正确 tag 退休（§12.4）。生产配置下副本与负载 tag 同源、同拍写入。06 需在关闭注错宏的综合网表中确认两者保留独立存储，并验证负载 tag 单比特翻转后 L1 仍报原 tag。
 3. **保护域**：只保护 RS 存储。检查之后的读取通路（zvt_ctrl 译码、阵列内的命令和 skew 寄存器）不在内，其中 B skew 已由第一阶段时间冗余覆盖。
 4. **misc 读取的结果**：misc 指令被拦后只报 trap。trap 后端到端仍受 LSU 卡死修复约束（04 §5.7，延后到 06），本轮只在 L1 观测。
 5. **RVVI**：同 §9.6 第 5 条，不变。
@@ -1829,7 +1830,7 @@ plusarg：`+VME_FT_INJ_SITE=rs|rs_mid`、`+VME_FT_INJ_N=<n>`（rs：第 n 条 PE
 ### 12.9 复现
 
 ```bash
-cd /home/lizeyu/eng/npu_ft/coralnpu   # bb8e529c
+cd /home/lizeyu/eng/npu_ft/coralnpu   # 主线 58325904，与实跑 bb8e529c 同树
 bazel test --nocache_test_results $(cat /home/lizeyu/eng/npu_ft/test-data/vme-ft-m7-bb8e529c/targets.txt)
 bazel test //tests/cocotb/vme_test:vme_ft_rspar          # 开宏：overlap + 4 个 RS trap + 10 个第一阶段恢复
 bazel test //tests/cocotb/vme_test:zvt_ft_rspar_unit //tests/cocotb/vme_test:zvt_ft_rspar_unit_replay
@@ -1838,3 +1839,15 @@ vcs -full64 -sverilog +define+VME_FT_ON+VME_FT_RSPAR_ON+VME_FT_INJECT_ON+TB_DEPT
     hdl/verilog/rvv/design/Zvt/zvt_ft_rs.sv hdl/verilog/rvv/design/Zvt/zvt_ft_rs_tb.sv -top zvt_ft_rs_tb
 ./simv +seed=1            # +inj_pct=0：无故障
 ```
+
+### 12.10 独立签收与 05 结项
+
+2026-11-29 完成对生产 RTL、测试判据和实跑提交 `bb8e529c` 的原始日志复核。外层 `5f1a6c29` 记录执行方交付。M1～M5 和 M7 已独立签收，M6 按 §0.2 延后。
+
+| 签收项 | 独立核对结果 |
+|---|---|
+| RS 读口与 trap 归属 | 关宏的两种注错均导致第 0 行数据错误。开宏后，首次读取与两次复制之间的读取分别在第 407、409 拍被拦，L1 在下一拍报原 tag 4。翻坏负载 tag（4→5）时 L1 仍报 4。故意让 trap 从负载取 tag，整核和模块检查器均按预期失败（§12.3、§12.4、§12.7）。 |
+| 正常节拍与恢复 | 奇偶开关两侧的 42 份重叠轨迹和 10 份恢复轨迹分别逐字节一致。异 tile 实际发射在第 408、416 拍，老指令第 424 拍通过。同 tile 四例间隔为 6/6/6/8 拍。按 `(mt, sub, elem)` 核对重放提交，老指令两次写入的 255 个与 1 个地址交集为空，年轻指令的 256 个地址全部来自重放。第三次失配触发 L1 trap，tag 为 4（§12.5）。 |
+| 回归完整性 | 61 个 Bazel 目标全部实际执行，包含第一阶段原有 33 项和 M7 新增 28 项。按深度、种子和注错配置核对 VCS 原始日志，33 次均通过，每次 20 万拍。两个 M7 模块级目标中，分别有 7 个与 1 个不同用例实际推进仿真时间（§12.4、§12.6）。 |
+
+05 的 trap 签收到 L1。06 承接发射组合路径时序、生产网表 tag 副本独立性和端到端 LSU trap 验证（§12.8）。
