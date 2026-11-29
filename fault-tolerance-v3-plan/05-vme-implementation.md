@@ -4,7 +4,7 @@
 > 第一阶段是核心机制（`VME_FT_ON`）；第二阶段是写入校验（`VME_FT_WCHK_ON`）和 RS 奇偶（`VME_FT_RSPAR_ON`），每项可单独叫停。
 > 方案、宏定义、验证项、不做的事项以 04 为准（§4.1～4.3、§6）；本文件只记实现过程、测试结果和与 04 假设不符的地方。
 > 分支：`fault-tolerance-v3`，起点 `29a4e555`（RVV FT）。
-> 状态（2026-11-29）：**第一阶段（M1～M5）完成**，签收提交 `ed5cd672`（RTL `70170f44`），验收见 §10（§10.8 为签收简表）。第二阶段 M6/M7 未开始。
+> 状态（2026-11-29）：**第一阶段（M1～M5）已独立签收**。主线签收快照 `57de0885` 与实跑提交 `ed5cd672` 的 Git 文件树完全相同。§10.8 为验收简表，§11 为提交映射和历史资料索引。第二阶段 M6/M7 未开始。
 > §3～§8 记录的单在飞门控、回滚清 mtInfo、`blk_complete_simple` 等过渡机制已被 §9 替换；§9 中重试上限（第 RETRY_MAX+1 次失败才 trap）、trap 合并、§9.8 简表和 `31f5f487` 日志目录已被 §10 订正，结论以 §10 为准。
 
 ## 里程碑
@@ -740,7 +740,7 @@ coralnpu/bazel-testlogs/tests/cocotb/vme_test/zvt_dual_insn_test_zvt_dual_insn_m
 
 **test.log 路径**：
 ```
-coralnpu-7d9cc321/bazel-testlogs/tests/cocotb/vme_test/zvt_dual_insn_test_zvt_dual_insn_mismatch_test/test.log
+back/worktrees/coralnpu-7d9cc321/bazel-testlogs/tests/cocotb/vme_test/zvt_dual_insn_test_zvt_dual_insn_mismatch_test/test.log
 ```
 
 #### N=1 负例
@@ -788,7 +788,7 @@ cd coralnpu
 bazel test //tests/cocotb/vme_test:zvt_dual_insn_test_zvt_dual_insn_mismatch_test
 
 # N=3 对照（旧版）
-cd coralnpu-7d9cc321
+cd /home/lizeyu/eng/npu_ft/back/worktrees/coralnpu-7d9cc321
 bazel test //tests/cocotb/vme_test:zvt_dual_insn_test_zvt_dual_insn_mismatch_test
 
 # N=1 负例
@@ -911,13 +911,13 @@ bazel-testlogs/tests/cocotb/vme_test/vme_test_ft_dispatch_interval_verilator/tes
 
 **旧版本（7d9cc321 worktree）**：
 ```
-/home/lizeyu/eng/npu_ft/coralnpu-7d9cc321/bazel-testlogs/tests/cocotb/vme_test/vme_test_ft_dispatch_interval_verilator/test.log
+/home/lizeyu/eng/npu_ft/back/worktrees/coralnpu-7d9cc321/bazel-testlogs/tests/cocotb/vme_test/vme_test_ft_dispatch_interval_verilator/test.log
 /tmp/fullcore_dispatch_old.log
 ```
 
 **详细对比报告**：
 ```
-tests/cocotb/vme_test/FULLCORE_DISPATCH_COMPARISON.md
+back/stage1-files/tests/cocotb/vme_test/FULLCORE_DISPATCH_COMPARISON.md
 ```
 
 ### 7.6 可复现命令
@@ -928,7 +928,7 @@ cd /home/lizeyu/eng/npu_ft/coralnpu
 bazel test //tests/cocotb/vme_test:vme_test_ft_dispatch_interval_verilator --test_output=streamed
 
 # 在旧版本运行
-cd /home/lizeyu/eng/npu_ft/coralnpu-7d9cc321
+cd /home/lizeyu/eng/npu_ft/back/worktrees/coralnpu-7d9cc321
 bazel test //tests/cocotb/vme_test:vme_test_ft_dispatch_interval_verilator --test_output=streamed
 
 # 提取关键信息
@@ -1653,3 +1653,31 @@ MISMATCH+DRAIN cyc=416 head_tag=4 retry=0
 3. 非 FT 构建的退休有效链（`miscRtVldD1`、`blkRtVld`）flush 后也会残留一拍，属上游行为，本轮只在 `VME_FT_ON` 下改。
 4. lint：本机没有 verible、clang-format-19、yapf3、buildifier、mdl、shellcheck，`utils/run_linters.sh` 没跑。
 5. trap 后端到端（LSU 卡死修复）仍按 04 §5.7 延后到 06，第一阶段只在 L1 观测。
+
+## 11. 独立签收与历史资料索引（2026-11-29）
+
+独立复核基于生产 RTL、测试源码及 §10 的原始日志。默认配置在第三次失配后以 tag 4 报 L1 trap，`MAX=0` 首错即报。另一个整核用例中，年轻前端异常 tag 13 先上报，老 VME tag 11 在第 358 拍仍能上报。退休背压用例覆盖 11 个 flush 时点与 ready 组合。例如 pass 后一拍 flush 时，四个 mtInfo FIFO 均清空，新指令 C 在第 65 拍通过、第 69 拍退休。重放日志按物理地址 `(mt, sub, elem)` 重数，老指令两次尝试分别写 255 个和 1 个地址，交集为空。正常同 tile 四组用例的实际间隔为 6/6/6/8 拍。阶段边界和沿用测试见 §10.8、§10.9。
+
+### 11.1 主线保留的代码快照
+
+| 用途 | 原实验提交 | 整理后的提交 |
+|---|---|---|
+| 单在飞、FT 开关回归基线 | `531c1667` | `531c1667` |
+| 单在飞重放和老退休记录保护 | `90753444` | `d935f599` |
+| 四 block 精确完成、跨尝试提交检查和 12 拍基线 | `84028c04` | `3b5c0ded` |
+| 多指令重叠、按序提交和重放 | `31f5f487` | `9f7a56ce` |
+| 异常边界修复与最终签收 | `ed5cd672` | `57de0885` |
+
+各行新旧提交的 Git tree ID 相同。随后内层提交 `b0dc9a4d` 移出六份历史 Markdown 报告。生产 RTL、BUILD、测试源码和测试数据与签收快照逐文件相同。外层设计节点保留 `75d4123`；§3～§8 的原记录 `7686592` 对应 `86fdc973`，最终 §10 原记录 `4ac2bc0` 对应 `93777426`。原始运行继续用当时的提交号标识。
+
+### 11.2 历史诊断资料
+
+| 旧材料 | 保留的结论及现行证据 |
+|---|---|
+| 整核 RVVI 退休背压草案 | RVVI 输出没有 ready，单靠退休跟踪无法施加背压。正式用例在真实 RS + ZVT 的 `vmeRtRdy` 握手口施压，直接观察四个 mtInfo FIFO 和 rtCmd。老记录保护见 §6、§9.4，flush 见 §10.2。 |
+| 发射间隔交付、事件排序订正和撤回记录 | 旧夹具的 26 拍含驱动等待。单在飞整核基线为 12 拍，读回 16×18。判断原因需区分上升沿前握手和沿后状态，撤回的逐段等待估算不作为测量结果。历史监视口径见 §7.7，当前正例和 RAW=4 负例见 §10.5、§10.7。 |
+| 双指令背压和精确完成夹具草案 | 缺最后一组时保持未完成，只有 p0 时继续等待，最后一组 p1 比较后才完成。四 block 的期望组数为 [4,4,2,2]。新旧对照见 §8.6～§8.8，签收覆盖见 §10.8。 |
+
+本机归档以 `/home/lizeyu/eng/npu_ft/` 为根。原始报告、旧诊断程序、RTL 备份和配套 BUILD 的原件与补丁在 `back/stage1-files/`，保留内层相对路径。四个旧 Git 工作树在 `back/worktrees/`，名称带 `inner-` 的是原先嵌在代码仓内的副本。工作树保留其已有改动。历史对照用例应在对应快照上运行。
+
+整理前两个分支的完整历史分别存于 `back/stage1-history/coralnpu-pre-squash.bundle` 和 `back/stage1-history/plan-pre-squash.bundle`，在各自原仓也可用 `refs/archive/stage1-pre-squash/<原分支名>` 查阅。签收原始日志保留在 `test-data/vme-ft-stage1-ed5cd672/`；`test-data/vme-ft-stage1-31f5f487/` 仅供历史对照，混入负例的文件见 §10.6。

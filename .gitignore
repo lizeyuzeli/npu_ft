@@ -1,3 +1,6 @@
 /coralnpu/
+/back/
+/test-data/vme-ft-stage1-31f5f487/
+/test-data/vme-ft-stage1-ed5cd672/
 /fault-tolerance-v3-plan/tools/area_probe/**/*.log
 /fault-tolerance-v3-plan/tools/area_probe/**/*.svf
