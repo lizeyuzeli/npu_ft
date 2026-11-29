@@ -4,7 +4,7 @@
 > 第一阶段是核心机制（`VME_FT_ON`）；第二阶段是写入校验（`VME_FT_WCHK_ON`）和 RS 奇偶（`VME_FT_RSPAR_ON`），每项可单独叫停。
 > 方案、宏定义、验证项、不做的事项以 04 为准（§4.1～4.3、§6）；本文件只记实现过程、测试结果和与 04 假设不符的地方。
 > 分支：`fault-tolerance-v3`，起点 `29a4e555`（RVV FT）。
-> 状态（2026-11-29）：**第一阶段（M1～M5）已独立签收**。主线签收快照 `57de0885` 与实跑提交 `ed5cd672` 的 Git 文件树完全相同。§10.8 为验收简表，§11 为提交映射和历史资料索引。05 最后一项为 M7 专用 RS 负载奇偶保护，待开发和独立签收。M6 写入校验与重写留作后续优化候选。
+> 状态（2026-11-29）：**M7 已交付，05 待独立签收**。第一阶段（M1～M5）已独立签收，主线签收快照 `57de0885` 与实跑提交 `ed5cd672` 的 Git 文件树完全相同（§10.8 验收简表，§11 提交映射和历史资料索引）。M7 专用 RS 负载奇偶保护的候选提交为 `bb8e529c`，实施与验收记录见 §12。M6 写入校验与重写留作后续优化候选。
 > §3～§8 记录的单在飞门控、回滚清 mtInfo、`blk_complete_simple` 等过渡机制已被 §9 替换；§9 中重试上限（第 RETRY_MAX+1 次失败才 trap）、trap 合并、§9.8 简表和 `31f5f487` 日志目录已被 §10 订正，结论以 §10 为准。
 
 ## 里程碑
@@ -17,7 +17,7 @@
 | M4 | 回滚、重试、trap 事件；单条 PE 在飞模式下注错测试通过 | **完成** |
 | M5 | 恢复指令重叠、持续注错 trap 验证、第一阶段其余 §6.3 验收项（§9；签收收尾 §10） | **完成**（`ed5cd672`） |
 | M6 | 第二阶段：`VME_FT_WCHK_ON` | 延后，后续优化候选 |
-| M7 | 第二阶段：`VME_FT_RSPAR_ON` | 已排定，待开发和独立签收 |
+| M7 | 第二阶段：`VME_FT_RSPAR_ON` | **已交付**（`bb8e529c`，§12），待独立签收 |
 
 M2～M7 的划分是暂定的，做到时按实际情况调整。每个里程碑完成后确认再进下一个。
 
@@ -1681,3 +1681,160 @@ MISMATCH+DRAIN cyc=416 head_tag=4 retry=0
 本机归档以 `/home/lizeyu/eng/npu_ft/` 为根。原始报告、旧诊断程序、RTL 备份和配套 BUILD 的原件与补丁在 `back/stage1-files/`，保留内层相对路径。四个旧 Git 工作树在 `back/worktrees/`，名称带 `inner-` 的是原先嵌在代码仓内的副本。工作树保留其已有改动。历史对照用例应在对应快照上运行。
 
 整理前两个分支的完整历史分别存于 `back/stage1-history/coralnpu-pre-squash.bundle` 和 `back/stage1-history/plan-pre-squash.bundle`，在各自原仓也可用 `refs/archive/stage1-pre-squash/<原分支名>` 查阅。签收原始日志保留在 `test-data/vme-ft-stage1-ed5cd672/`；`test-data/vme-ft-stage1-31f5f487/` 仅供历史对照，混入负例的文件见 §10.6。
+
+## 12. M7：RS 负载奇偶保护（`VME_FT_RSPAR_ON`，2026-11-29）
+
+**代码提交**（内层仓库 `fault-tolerance-v3`，在 `b0dc9a4d` 之上）：
+
+| 提交 | 内容 |
+|---|---|
+| `bb8e529c` | RTL、注错点、测试和 BUILD 一次提交（**候选提交**，下文所有运行都在此提交上） |
+
+**原始日志**：`/home/lizeyu/eng/npu_ft/test-data/vme-ft-m7-bb8e529c/`（不入库，已加入外层 `.gitignore`，下文路径相对此目录）。`run_head.txt` 记 HEAD、工作区和运行时间；`final_regression_bb8e529c.txt` 是 61 个目标一次 `bazel test --nocache_test_results` 的完整输出，目标清单在 `targets.txt`。每个目标一个目录，分 shard 的保留 `shard_k_of_n/`；`test.log` 是整次仿真输出，`test.outputs/<case>.log` 是该用例的事件切片。正例在回归结束后立即收集，之后才跑负对照；负对照单放 `neg/<变异名>/`（`mutation.diff`、`bazel_summary.txt` 和该次运行的日志）。RS 参考模型随机测试在 `rs_unit/`（VCS，命令在 `rs_unit/cmd.txt`）。
+
+### 12.1 保护范围、奇偶生成与检查
+
+**保护字段**：RS 表项存的整个 `ZVT_RS_t`，不挑字段。本配置下为 372 bit（`[VME_FT_CFG] rspar=1 payload_bits=372 parity_groups=12`），包括 rob_tag、rob_entry、funct6/funct3、vs2 号、is_lsu/is_store、vstart、altfmt、mtwiden、tm、vl、tk、sew、eew_mt、rndMode、tss、vs1_data、vs2_data、dst_index、first/last_uop_valid、uop_index；定义 `TB_SUPPORT` 时还包括 uop_pc。每 32 bit 一组偶校验，共 11 个整组和 1 个 20 bit 尾组，每项 12 位奇偶。另存 4 bit rob_tag 副本（理由见下文 trap 归属）。每项共 16 bit，深度 12 时为 192 个触发器。04 §4.2 估的“每个 uop 约 10 bit”按的是旧位宽，实际 12 位，另加 tag 副本。
+
+**生成**（`zvt_ft_rs.sv` 写入侧）：多路 push 压缩之后，每个实际写入的表项用 `gen_par(datain_seq[j])` 从 dispatch 交来的 uop 算奇偶，与负载同拍写入 `par_mem` 的同一下标，tag 副本写入 `tag_mem`。奇偶跟着下标走，因此随表项经过压缩、按 DEPTH 取模的指针回绕、发射偏移、回滚（表项不搬动，只是偏移清零）和重放。flush 只复位指针，旧奇偶在下一次 push 时被覆盖。
+
+**检查**：每拍对发射视图的 4 个 lane 组合计算 `par_syn[i] = gen_par(issue_data[i]) ^ par_mem[rptr+off+i]`，`par_err[i] = issue_vld[i] && |par_syn[i]`。以下读取都经过这个检查：首次发射、p0/p1 的每一次读取、重放（回滚后偏移回到队头，读的是同一批表项）和 misc 读取。
+
+**哪些 lane 算“被使用”**：PE 指令在每个组的每一份（g0p0、g0p1 … gNp1）都读 4 个 lane。vs1/vs2 数据来自 4 个 lane，控制字段来自 lane 0，first/last 分别来自 lane 0/3。misc 指令只读 lane 0。所以：
+
+- `par_blk = par_err[0] || (wide && |par_err[3:1])`；
+- `wide` 是 zvt 输出的 `ftRsWide`，和 `zvt_ctrl` 的 `isPe[0]` 用同一个译码（funct3 为 OPIVV/OPFVV 且 !is_lsu），只看数据、不看 uopVld，所以没有组合环。
+- lane 0 无条件检查：lane 0 自身坏了，不管译码字段被翻成什么都会拦住，坏表项不能靠损坏的译码绕过检查。lane 0 完好时它的 `wide` 可信，按构造 PE 指令恰好占 4 项，lane 1～3 就属于同一条指令。
+- 下一次读取不用的 lane（misc 后面的年轻表项）不检查，所以既不会抢报，也不会阻塞老指令。轮到它们处于 lane 0 时再检查。
+
+**拦截**：RS 输出 `issue_go = issue_vld & ~par_blk`，接到 `zvt.uopVld`（`rvv_backend.sv` 和模块级夹具接法相同）。PE 发射（`peCmdVld` 依赖 `isPe & uopVld`）和 misc 译码都要求 uopVld，所以失败那拍视图里什么都不会被接受。`issue_vld` 本身不变，`fifo_almost_empty_rs2zvt` 和空闲判断不受影响。仿真断言两条：`zvt_ft_rs: entry taken while its parity fails` 和 `zvt: RS view presented while its parity fails`，61 个目标中均未触发。
+
+**trap 和归属**：
+
+- `par_trap = par_blk && (off == 0)`，即失败表项是 RS 中最老的，此时没有已发射、未校验、比它更老的指令。`zvt_ft` 收到 `rs_par_trap_i` 且不在 `FT_TRAP` 时进入 `FT_TRAP`，发一拍 `ft_trap_o`，tag 为 `rs_par_tag_i`，优先于 DRAIN/ROLLBACK 的转移。之后走第一阶段同一条通路：`rvv_core_ft_trap_arb` → `trap_valid_o`，哨兵 STORE/全 1。trap 日志增加 `cause=rspar|retry` 字段。
+- 失败表项更年轻时（`off > 0`）只拦不报。更老的指令照常比较、提交、通过、退休，`off` 降到 0 后再报。回滚会把视图带回更老的队头，那条被重发；坏表项仍在其后等待。
+- 与通过不会同拍：`off == 0` 时没有已完整发射、未校验的指令。部分发射的队头（g0p0 已接受）就是这条坏指令本身，trap 抢在它的排空之前报出。
+- 已通过的老指令的退休记录不受影响：L1 trap 带的是年轻指令的 tag，RetirementBuffer 按序先退休老的，再取这个 trap（见 §12.3 年轻用例：L1 trap 在第 426 拍，老指令第 428 拍退休，第 429 拍 flush）。
+- **rob_tag 来源**：RS 内的 tag 副本 `tag_mem`，push 时取自 dispatch 的 `rs_dp2zvt[k].rob_tag`，与负载分开存放。奇偶只能检测，负载的 tag 组失败时负载里的 tag 不可信。单故障下负载失败时副本必然完好，所以翻位恰好命中 tag 位时 trap 仍归给原指令（§12.4 tag 用例）。副本本身不校验：它被翻时负载完好、不会 trap，副本也就不会被使用（模块级 tag (b)）。存储的奇偶位被翻时，负载完好但检查失败，结果是一次误报 trap，不会产生错误结果（模块级 tag (c)）。
+
+**时序与面积**：未综合。检查位于 RS 视图 → uopVld → canStart/peCmdVld 的组合路径上，代价是 4 个 lane × 12 组 32 输入异或加比较，与 `ft_pass` 组合路径一起留到 06 综合确认（04 §6.5 风险 1）。不能改成打一拍再检查：`rs_mid` 那种在接受 g0p0 的沿上翻位、下一拍就读的情况会漏掉。正常路径节拍不变（§12.5）。
+
+### 12.2 注错点
+
+第一阶段的 `rs` 钩子在 push 之前对 `rs_dp2zvt` 异或。若奇偶取自翻坏后的输入，数据与奇偶会自洽，测不到保护。M7 把两个 RS 注错都移进 `zvt_ft_rs` 的存储侧，奇偶始终取自 dispatch 交来的原始 uop：
+
+- `inj_push[k]`：push 槽 k 写入的表项存 `datain ^ mask`（站点 `rs`，首次发射前存储值变坏）；
+- `inj_flip`：对已存表项异或，位置为视图 lane `inj_lane`，或 `inj_head` 时为 `rptr + inj_lane`，对象可以是负载、奇偶位或 tag 副本（站点 `rs_mid` 在接受 g0p0 的同一个沿上翻 lane 0）。
+
+plusarg：`+VME_FT_INJ_SITE=rs|rs_mid`、`+VME_FT_INJ_N=<n>`（rs：第 n 条 PE 指令，按 first uop 计数；rs_mid：第 n 次 g0p0）、`+VME_FT_INJ_LANE=<l>`（rs 为 uop_index，rs_mid 为视图 lane，默认 0）、`+VME_FT_INJ_FIELD=vs2|vs1|tag|funct3|first|last|islsu`（默认 vs2）、`+VME_FT_INJ_BIT=<i>`。默认值与第一阶段一致（lane 0，vs2 bit 0）。inject 日志记录拍号、物理表项号和**注入前**的 rob_tag，作为期望 tag。模块级夹具直接驱动同样的端口。
+
+关宏对照仍然成立，见 §12.3 左列：`vme_ft_inj_rs`、`vme_ft_inj_rs_mid` 都是同一第 406/408 拍、同一表项 8、tag 4，结果与第一阶段相同（tile 0 第 0 行 SDC）。
+
+### 12.3 两个主反例：关宏与开宏
+
+**首次发射前翻位**（insn0 lane 0 的 vs2 bit 0，seed 96）
+
+| | 关宏 `vme_ft_inj_rs_verilator/test.outputs/inj_rs.log` | 开宏 `vme_ft_rspar_inj_rs_par_verilator/test.outputs/inj_rs_par.log` |
+|---|---|---|
+| 注错 | cyc=406 site=rs lane=0 entry=8 tag=4 | 同左 |
+| 读取 | ISSUE cyc=408 tag=4 att=0、cyc=416 tag=5，无失配 | cyc=407 `[VME_FT_RSPAR] lanes=0001 wide=1 off=0 read=g0p0 att=0 lane0_tag=4 tag_copy=4 trap_req=1`：首次 g0p0 被拦，没有 ISSUE |
+| trap | 无 | cyc=408 `[VME_FT_TRAP] tag=4 cause=rspar`；`[VME_FT_L1_TRAP] 1090000 trap_valid_o=1 rob_tag=4 opcode=1 bits=0x1ffffff source=vme_ft`；cyc=410 FLUSH |
+| 写入和退休 | PASS cyc=424、RETIRED cyc=428；tile 0 第 0 行 SDC（bench：`SDC in tile 0 row 0, no mismatch, no rollback`） | tag 4 无 ISSUE/MISMATCH/COMMIT/PASS/PE 退休，insn1 也未发射 |
+
+**g0p0 与 g0p1 之间翻位**（insn0 lane 0，seed 97）
+
+| | 关宏 `vme_ft_inj_rs_mid_verilator/test.outputs/inj_rs_mid.log` | 开宏 `vme_ft_rspar_inj_rs_mid_par_verilator/test.outputs/inj_rs_mid_par.log` |
+|---|---|---|
+| g0p0 | ISSUE cyc=408 tag=4 att=0，同拍 inject site=rs_mid entry=8 tag=4（接受 g0p0 的沿） | 同左 |
+| g0p1 | 读到坏表项：cyc=416 block 0 g0 共 8 个元素 MISMATCH，DRAIN | cyc=409 `[VME_FT_RSPAR] lanes=0001 off=0 read=g0p1 att=0 trap_req=1`：g0p1 被拦，没有进入阵列 |
+| 之后 | ROLLBACK cyc=427，重放 att=1 两份都读坏表项、一致，PASS cyc=444、RETIRED cyc=448；第 0 行 SDC | cyc=410 `[VME_FT_TRAP] tag=4 cause=rspar`；`[VME_FT_L1_TRAP] 1092500 … rob_tag=4 … source=vme_ft`；cyc=412 FLUSH active_slots=0001 |
+| 写入和退休 | 坏值提交并退休 | 无 MISMATCH/DRAIN/ROLLBACK，孤立的 g0p0 从未提交，tag 4 未退休 |
+
+两例 L1 的 rob_tag 都等于 inject 行记录的注入前 tag 4，bench 逐项断言：拦截拍等于注入拍 +1、trap 等于请求拍 +1、flush 晚于 L1 trap。
+
+### 12.4 读口与边界覆盖
+
+**整核（开宏）**
+
+| 目标 | 注错 | 结果（`test.outputs/`） |
+|---|---|---|
+| `vme_ft_rspar_inj_rs_tag_par` | insn0 uop0 的 rob_tag bit 0（4→5） | cyc=407 `lane0_tag=5 tag_copy=4`，trap 和 L1 都是 rob_tag=4；tag 4 和 5 都无提交、无退休 |
+| `vme_ft_rspar_inj_rs_young_par` | insn1 的 uop2 vs1 bit 5（表项 2，insn0 在 8～11，insn1 跨过回绕） | cyc=416 `lanes=0100 wide=1 off=4 trap_req=0`：只拦不报；insn0 256 个元素各提交一次，PASS cyc=424；cyc=425 请求（off=0）；L1 rob_tag=5 在 1112500（cyc 426）；insn0 RETIRED cyc=428；FLUSH cyc=429 |
+
+**模块级**（真实 `zvt_ft_rs` + `zvt`，`zvt_ft_rspar_unit/test.log`、`zvt_ft_rspar_unit_replay/test.log`，8/8 PASS）
+
+| 用例 | 覆盖 | 实测 |
+|---|---|---|
+| replay_read | 重放读：A 最后一组失配（att 0），排空中把 A 的 uop1 翻坏 | 回滚后 `read=g0p0 att=1 lanes=0010 off=0`，trap tag 3；A 尝试 0 提交 255 个，尝试 1 零提交，未退休 |
+| misc_read | misc 读：vtzero 的 vs1 位（vtzero 不用这个字段） | `read=misc wide=0`，trap tag 2，无 tile 写、无退休 |
+| decode_fields | 损坏的译码字段：vtmmu funct3（变 OPMVX）、first、is_lsu、lane 3 的 last、vtzero funct3（变 OPIVV） | 5 种都拦住：lane 0 的三种 `wide=0/1 lanes=0001`，last 为 `lanes=1000`，均 trap tag 7、无发射、无写入、无退休 |
+| adjacent_lanes (a) | 相邻 lane 有效但未被使用：vtzero Z 在 lane 0，坏 B 在 lane 1 | `par_err=0010`、par_blk=0、par_trap=0，Z 写 tile 并退休；B 到 lane 0 后拦住，trap tag 3 |
+| adjacent_lanes (b) | 老指令在飞时年轻表项坏 | B 从 cyc 17 起被拦（off=4、无请求），A 在 cyc 25 通过并退休，cyc 27 trap tag 5 |
+| wrap_sparse | 回绕 + 非相邻槽压缩：C 以槽 1,2 和 0,2 稀疏 push，写入表项 9、10、11、0，坏的 uop3 在表项 0 | 拦截 `lanes=1000 off=8 trap_req=0`；Z、A、B 退休后 trap tag 4，push 后 wptr=1 |
+| flush_reuse | 年轻坏表项等待中被外部 flush | 不 trap；新指令 C、D 复用表项 0～7，通过并退休，flush 后无 parity 事件，par_err 恒 0 |
+| tag (a)/(b)/(c) | 负载 tag 位 / 只翻 tag 副本 / 翻存储的奇偶位 | (a) `lane0_tag=7 tag_copy=6` → trap 6；(b) 无事件，A 以 tag 6 退休；(c) `lanes=0100` → trap 6 |
+| no_false_alarm | 无故障：vtzero + 4 条 vtmmu（含稀疏 push），指针回绕 | 5 条按序退休，73 拍 par_err 恒 0，其中 11 拍 wptr<rptr |
+
+（cocotb 2.0 不能在运行时跳过用例：每个目标里不属于本目标 plusarg 的用例打印 `skipped:` 后以 0 ns 结束，列为 PASS，与第一阶段夹具相同。）
+
+**RS 参考模型随机测试**（`zvt_ft_rs_tb.sv`，VCS，每次 20 万拍）：参考模型的每个表项携带自己的翻位，逐拍比较 issue_data、每个 lane 的 par_err、par_blk、par_trap、par_tag 和 issue_go。随机内容包括 push 槽位、rob_tag、wide，以及约 2% 的拍注入一次单比特故障（push 时翻负载，或对已存表项翻负载、奇偶位、tag 副本，位置相对视图或相对 rptr）。视图被拦时不驱动 iss/misc_pop，与消费方约定一致。结果见 §12.6。DEPTH 8/12/16 都覆盖。
+
+### 12.5 正常路径与第一阶段复核（同一提交、同一次运行）
+
+- **节拍逐字节不变**：`vme_ft_overlap_verilator` 与 `vme_ft_rspar_overlap_verilator` 的 42 个事件切片（`shard_*/test.outputs/*.log`，含 ISSUE/COMMIT/PASS/HANDSHAKE 的拍号与数据）逐字节相同。异 tile：insn0 g0p0 cyc=408，insn1 g0p0 cyc=416，insn0 PASS cyc=424，insn1 首次写 cyc=425、PASS cyc=432，真重叠。同 tile tm=2/4/6/16：301→307/307/307/309，间隔 6/6/6/8。
+- **恢复逐字节不变**：old_young、retry_ok、trap、trap_fe、young、bskew、dupbuf、dupbuf_addr、done、fp_replay 共 10 个注错目标，开宏 `vme_ft_rspar_inj_*` 与关宏 `vme_ft_inj_*` 的切片相同。old_young 中 insn0 尝试 0/1 提交 255/1 个，insn1 全部来自尝试 1（`vme_ft_rspar_inj_old_young_verilator/test.log`）。trap 在第 3 次失配后 rob_tag=4。trap_fe 中 L1 先 rob_tag=13（前端）后 rob_tag=11（VME）。
+- **官方用例**：`vme_test_ft{,_d8,_inject,_rvvft}` 与对应 `vme_test_ft_rspar*` 都是 20/20，4 个 shard 的仿真时间两两相同，例如 FT/RSPAR 均为 15306.25 / 13890.00 / 12870.00 / 22293.75 ns，RVV FT 同开时均为 15306.25 / 13890.00 / 12897.50 / 22327.50 ns。官方程序发射间隔 `vme_test_ft_rspar_dispatch_interval` 为 246250→253750（6 拍），与关宏相同。
+- **宏关**：`vme_test_verilator`（不定义 VME_FT_ON）、`vme_rvvi_retire_test_verilator` 通过。
+- **RVV FT 同开**（`*_rvvft`）：rs_par、rs_mid_par、rs_tag_par、rs_young_par、trap、trap_fe 的切片与不开 RVV FT 时逐字节相同，L1 分别为 rob_tag 4、4、4、5、4、13→11，`source=vme_ft`（trap_fe 先 frontend）。
+
+### 12.6 测试目标与退出结果
+
+`bb8e529c` 上 61 个目标一次运行，61/61 通过、全部实际执行（`final_regression_bb8e529c.txt`：`Executed 61 out of 61 tests: 61 tests pass.`）。
+
+| 组 | 目标 | 结果 |
+|---|---|---|
+| 第一阶段原回归（33） | §10.8 的全部目标，含 `vme_test_verilator`、`vme_test_ft*`、`vme_ft_overlap`、11 个 `vme_ft_inj_*`（其中 rs、rs_mid 为关宏 SDC 对照）、trap_rvvft/trap_fe_rvvft/trap_max0、`zvt_ft_unit_*`、`zvt_precise_completion_test`、`check_commit_uniqueness_test`、`rvv_core_ft_trap_arb_test`、`rvv_arithmetic_ft{,_inject}_cocotb_test` | 33 PASS |
+| 开宏、无注错 | `vme_test_ft_rspar`、`_inject`、`_d8`、`_rvvft`、`vme_test_ft_rspar_dispatch_interval`、`vme_ft_rspar_overlap` | 6 PASS |
+| 开宏、第一阶段恢复 | `vme_ft_rspar_inj_{old_young,retry_ok,trap,trap_fe,young,bskew,dupbuf,dupbuf_addr,done,fp_replay}` | 10 PASS |
+| 开宏、RS trap | `vme_ft_rspar_inj_{rs,rs_mid,rs_tag,rs_young}_par` | 4 PASS |
+| 开宏 + RVV FT | `vme_ft_rspar_inj_{rs,rs_mid,rs_tag,rs_young}_par_rvvft`、`vme_ft_rspar_inj_{trap,trap_fe}_rvvft` | 6 PASS |
+| 模块级 | `zvt_ft_rspar_unit`、`zvt_ft_rspar_unit_replay` | 2 PASS（8 个用例） |
+
+新增模型（`tests/cocotb/BUILD`）：`vme_core_mini_axi_ft_rspar_model`、`_rspar_inject_model`、`_rspar_d8_model`（manual）、`_rspar_rvvft_model`（manual）；`tests/cocotb/vme_test/BUILD` 中的 `zvt_ft_unit_rspar_model`。
+
+**RS 参考模型随机测试**（`rs_unit/`，VCS W-2024.09，`zvt_ft_rs.sv`/`zvt_ft_rs_tb.sv` 与 `bb8e529c` 一致）：33 次运行全部 PASS，无断言报错。
+
+| 配置 | DEPTH | seed | 结果 | 日志 |
+|---|---|---|---|---|
+| 关 RSPAR（`VME_FT_ON`） | 8 / 12 / 16 | 1～5 | 15 PASS；DEPTH=12 seed 1 的统计与 M1 逐项相同（push 187640、iss 47478、rel 40658、rollback 4293、clear 1014、max_off=12） | `run_base_<d>_<s>.log` |
+| 开 RSPAR + INJECT，`inj_pct=2` | 8 / 12 / 16 | 1～5 | 15 PASS；seed 1：DEPTH=8/12/16 分别注入 push 530/593/643 次、存储翻位 2223/2185/2220 次，拦截 3600/4171/4719 拍，其中请求 trap 2806/2852/2852 拍，坏表项可见但不在下一次读取内（不拦）1552/1787/1979 拍，max_off 8/12/16 | `run_rspar_<d>_<s>.log` |
+| 开 RSPAR + INJECT，`inj_pct=0` | 8 / 12 / 16 | 1 | 3 PASS，拦截 0 拍、par_err 恒 0（无误报） | `run_rspar_<d>_1_inj0.log` |
+
+### 12.7 负对照
+
+- **检查器有效**（`neg/rspar_tag_from_payload/`）：`zvt.sv` 中把 `rs_par_tag_i` 改接负载里的 `uop[0].rob_tag`（即不用副本），在 `bb8e529c` 上跑 `vme_ft_rspar_inj_rs_tag_par` 和 `zvt_ft_rspar_unit` 后 `git checkout` 恢复。两个目标都 FAILED：整核 `AssertionError: trap tag 5 != 4`，模块级 tag (a) `trap tag 7, expected 6`。
+- **保护前基线**：关宏的 `vme_ft_inj_rs`、`vme_ft_inj_rs_mid` 在同一次回归中按预期判定 SDC（§12.3 左列），与开宏同一注错形成对照。
+- 旁路奇偶检查、只查 lane 0、trap 不看 off、奇偶取自翻坏值这四个 RTL 变异没有运行，不作为交付前置条件。
+
+### 12.8 已知限制
+
+1. **时序**：检查在发射的组合路径上（§12.1），06 综合确认。若不满足，可在 RS 内把奇偶比较拆成逐组预计算，但不能简单打一拍。
+2. **奇偶的固有边界**：同一组内偶数个位翻转检测不到。存储的奇偶位被翻会误报 trap（不产生错误结果）。tag 副本不校验（单故障下不影响归属，§12.1）。
+3. **保护域**：只保护 RS 存储。检查之后的读取通路（zvt_ctrl 译码、阵列内的命令和 skew 寄存器）不在内，其中 B skew 已由第一阶段时间冗余覆盖。
+4. **misc 读取的结果**：misc 指令被拦后只报 trap。trap 后端到端仍受 LSU 卡死修复约束（04 §5.7，延后到 06），本轮只在 L1 观测。
+5. **RVVI**：同 §9.6 第 5 条，不变。
+6. **lint**：本机没有 verible、yapf3、buildifier、mdl，`utils/run_linters.sh` 没跑。VCS 整核仿真未跑。
+7. 模块级夹具用 `hold_i` 让多条指令先进 RS。保持期间检查照常进行，整核没有这个输入。
+
+### 12.9 复现
+
+```bash
+cd /home/lizeyu/eng/npu_ft/coralnpu   # bb8e529c
+bazel test --nocache_test_results $(cat /home/lizeyu/eng/npu_ft/test-data/vme-ft-m7-bb8e529c/targets.txt)
+bazel test //tests/cocotb/vme_test:vme_ft_rspar          # 开宏：overlap + 4 个 RS trap + 10 个第一阶段恢复
+bazel test //tests/cocotb/vme_test:zvt_ft_rspar_unit //tests/cocotb/vme_test:zvt_ft_rspar_unit_replay
+# RS 参考模型（VCS），见 rs_unit/cmd.txt
+vcs -full64 -sverilog +define+VME_FT_ON+VME_FT_RSPAR_ON+VME_FT_INJECT_ON+TB_DEPTH=12 \
+    hdl/verilog/rvv/design/Zvt/zvt_ft_rs.sv hdl/verilog/rvv/design/Zvt/zvt_ft_rs_tb.sv -top zvt_ft_rs_tb
+./simv +seed=1            # +inj_pct=0：无故障
+```
