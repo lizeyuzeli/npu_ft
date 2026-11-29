@@ -12,7 +12,7 @@
 | 方向 | [02-direction-discussion.md](02-direction-discussion.md) | v3 的机制选择、开销目标、验证策略 | ✅ 完成（R6） |
 | RVV 实现 | [03-rvv-implementation.md](03-rvv-implementation.md) | RVV 冗余比较 + 重放纠错的功能级实现和 RTL 注错验证 | ✅ 完成（M1-M5） |
 | VME 方案 | [04-vme-ft-design.md](04-vme-ft-design.md) | VME 容错的方案讨论、调研、决策记录、交给 05 的输入 | ✅ 完成（R2，2026-11-26） |
-| VME 实现 | [05-vme-implementation.md](05-vme-implementation.md) | VME 容错的功能级实现和 RTL 注错验证，分两阶段 | 🔄 进行中（M3 诊断基线完成，2026-12-04） |
+| VME 实现 | [05-vme-implementation.md](05-vme-implementation.md) | VME 容错的功能级实现和 RTL 注错验证，分两阶段 | 🔄 第一阶段完成（M5，2026-11-28，代码 31f5f487）；第二阶段待做 |
 | 06 以后 | 待定 | 综合、功耗、性能、网表注错、存储层、LSU trap 修复 | 📋 候选 |
 
 ## 文档更新规则

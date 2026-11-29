@@ -4,7 +4,8 @@
 > 第一阶段是核心机制（`VME_FT_ON`）；第二阶段是写入校验（`VME_FT_WCHK_ON`）和 RS 奇偶（`VME_FT_RSPAR_ON`），每项可单独叫停。
 > 方案、宏定义、验证项、不做的事项以 04 为准（§4.1～4.3、§6）；本文件只记实现过程、测试结果和与 04 假设不符的地方。
 > 分支：`fault-tolerance-v3`，起点 `29a4e555`（RVV FT）。
-> 状态（2026-11-26）：M1 完成，等确认后进 M2。
+> 状态（2026-11-29）：**第一阶段（M1～M5）完成**，签收提交 `ed5cd672`（RTL `70170f44`），验收见 §10（§10.8 为签收简表）。第二阶段 M6/M7 未开始。
+> §3～§8 记录的单在飞门控、回滚清 mtInfo、`blk_complete_simple` 等过渡机制已被 §9 替换；§9 中重试上限（第 RETRY_MAX+1 次失败才 trap）、trap 合并、§9.8 简表和 `31f5f487` 日志目录已被 §10 订正，结论以 §10 为准。
 
 ## 里程碑
 
@@ -14,7 +15,7 @@
 | M2 | 交错发射（`zvt_pe_array.sv`、`zvt_pe_block.sv`）+ 写口前提交单元（只检测） | 完成 |
 | M3 | 按序校验、RS 当 ROB（发射/释放解耦）、退休链、`zvt_ctrl.sv` 配套改动；FT 开不注错回归 | 完成 |
 | M4 | 回滚、重试、trap 事件；单条 PE 在飞模式下注错测试通过 | **完成** |
-| M5 | 恢复指令重叠、持续注错 trap 验证、第一阶段其余 §6.3 验收项 | 进行中 |
+| M5 | 恢复指令重叠、持续注错 trap 验证、第一阶段其余 §6.3 验收项（§9；签收收尾 §10） | **完成**（`ed5cd672`） |
 | M6 | 第二阶段：`VME_FT_WCHK_ON` | 待做 |
 | M7 | 第二阶段：`VME_FT_RSPAR_ON` | 待做 |
 
@@ -475,10 +476,15 @@ Row 3: [18, 18, 18, 18]
 |---|---|---|---|
 | 1 | PE 的 rtCmd 改到校验通过时 push | `mtInfoRs` 的注释明确每个 rtCmd push 必须与 mtInfo push 一一对应，否则 `vmeRt` 卡死 | M2 保持 rtCmd 原样，退休链改动留到 M3 |
 | 2 | 命令行 `-D` 来不及影响结构体 typedef | 生成文件里宏定义在结构体之前，`-D` 是生效的 | 撤回把 `VME_FT_ON` 写进 `rvv_backend_config.svh` 的做法。那会让不开 FT 的模型也打开 FT |
+| 3 | PE 的 rtCmd 在校验通过时 push（§4.1 ③） | rtCmd 的 push 受 `rtCmdRdy` 约束，放到校验时要预留空位 | M5：rtCmd 仍在**首次**发射时 push（重发不再 push），mtInfo 改为校验通过时 push；失败尝试什么都不推，回滚不清 mtInfo（§9.1） |
+| 4 | 换头当拍"零余量，要加断言"（§4.1 ④） | 后一条第一次比较与前一条最后一次比较同拍是常态（n=4 时每条都如此） | 实现为显式换头：同拍新队头的比较直接提交；不属于队头也不属于换头的比较按失配处理（回滚），不只报断言 |
+| 5 | `VME_FT_RETRY_MAX` "连续失败几次后报 trap" | 字面与"设成 0 就是只检测"矛盾 | 按"允许的重试次数"实现：第 RETRY_MAX+1 次失败报 trap，0 即首次失配报 trap |
+| 6 | 回滚排空"约 10 拍" | 排空条件取阵列空闲（含 skew 级）和提交级空，下限 4 拍 | 实测检测到回滚脉冲 10～11 拍，每次回滚使该指令通过推迟 20～27 拍 |
+| 7 | 同 tile RAW 按 tile 号比较 | int32 累加器占 4 个 MT，`dst_index[4:1]` 不同的两个 tile 可能落在同一组 MT | 比较 `dst_index[4:3]`（累加器组），更严，对 4 对齐的 tile 无差别 |
 
 ## 已知问题
 
-（第一阶段结束时整理）
+第一阶段的已知限制和遗留见 §9.6。
 
 ---
 
@@ -1110,19 +1116,18 @@ bazel-testlogs/tests/cocotb/vme_test/zvt_min_dispatch_test_zvt_min_dispatch_inte
 1. **状态非槽化**：ftExpGrpReg、exp_grp_saved、grp_seen 各只有一套，未按 slot 独立保存
    - 单在飞时正确：当前版本保持生产单在飞门控（zvt_ctrl.sv:152 `!ftInFlight`）
    - 重叠时风险：恢复指令重叠前需按槽独立保存完成状态
-   
-2. **元素唯一性检查**：跨尝试元素各提交一次已人工核实，尚未自动化
 
-3. **定向测试缺失**："最后期望组延后、dupBuf 暂空"场景需独立测试
-   - 建议形状：tm=11, tn=11 → 期望 [4,4,2,2]
-   - 验证点：前面组完成、dupBuf 空、最后组未到时 ft_pass=0
+2. **元素唯一性检查**：已纳入自动退出条件，见 §8.7。
+   跨尝试各元素只提交一次由检查器判定，不再只靠人工核对。
+
+3. **定向测试缺失**：tm=11 tn=11 的顺序执行对比见 §8.6。
+   "前面组已处理、dupBuf 空、最后组延后"的四 block 缺组场景已由
+   模块级测试验证，见 §8.8。
 
 ### 8.5 下一步工作
 
-1. 创建 tm=11 tn=11 定向测试，证明当前版等待最后组
-2. 将元素唯一性纳入自动断言
-3. 按 slot 独立保存 exp_grp、grp_seen、blk_all_grp_seen
-4. 恢复指令重叠（移除 !ftInFlight 门控）
+1. 按 slot 独立保存 exp_grp、grp_seen、blk_all_grp_seen
+2. 恢复指令重叠（移除 !ftInFlight 门控）
 
 **原始日志**：
 ```
@@ -1162,3 +1167,489 @@ bazel-testlogs/tests/cocotb/vme_test/vme_test_ft_inj_mset_seq_verilator/test.log
 
 **代码提交**: 8572c25d (添加 tm=11 tn=11 测试用例)
 
+### 8.7 跨尝试元素提交唯一性（自动退出条件）
+
+**检查单位**：同一条逻辑指令、同一个实际目的元素
+`(blk, port, elem, mt, sub)`。同一条 PE 重放时 slot 可以变化，
+已经提交的元素仍只能写一次；下一条合法乘加即使写同一地址，
+也重新计数。
+
+**检查器**：`tests/cocotb/vme_test/check_commit_uniqueness.py`，
+退出条件是 Bazel 目标
+`//tests/cocotb/vme_test:check_commit_uniqueness_test`。
+发现重复、缺注错、缺重放或缺应提交元素时返回非零，并报告
+逻辑指令、元素地址、首次与重复提交的行号、时间和 slot。
+生产单在飞门控（`zvt_ctrl.sv:152` 的 `!ftInFlight`）保持不变。
+
+**旧故障**：`/tmp/ft_precise_fix_test.log`。tag 15 的
+`(blk=0, port=0, elem=0, mt=0, sub=0)` 在第 62 行 508750ps、
+slot 0 提交 `0x0000155e`，又在第 287 行 541250ps、slot 1 提交
+`0x00002abc`。检查器返回 1，报告 143 处重复；加 `--expect-fail`
+后返回 0。
+
+**合法回归**（现有定向日志，检查器返回 0）：
+
+| 用例 | 结果 |
+|---|---|
+| 5×7 注错重放（`vme_test_ft_inj_p0`，tag 4，3430000ps） | 一次注错、一次重放，35 个不同元素、140 字节，无重复 |
+| 4×4 双乘加（`vme_test_ft_inj_mset_seq`） | tag 15 与 tag 2 各提交 16 个元素一次，合计 128 字节；最终内存 16×18 |
+
+**缺事件也失败**：定向夹具去掉 5×7 的注错、重放或任一应提交元素后，
+同一 Bazel 目标返回非零。
+
+### 8.8 四 block 缺组对照（已验证）
+
+`c87fc237`（多块精确完成测试：同拍接收监视与独立期望组检查）的
+`[4,4,2,2]` 模块级对照已验证，不再是待办。
+
+- 目标：`//tests/cocotb/vme_test:zvt_precise_completion_test`，
+  用例 `zvt_precise_completion_multiblock_4_4_2_2_test`。
+- 期望组数 `[4,4,2,2]`，共 12 组；延后组是 `(block 3, group 1)`。
+- 当前版：11 组到齐后空窗 30 拍（cycle 22 到 52），`ft_pass` 保持 0；
+  `(block 3, group 1)` 的 p0/p1 都到齐后，cycle 59 完成一次。
+  Bazel 退出码 0。
+- 旧版 `ccff1391`：cycle 22 报 `premature ft_pass`，当时
+  `(block 3, group 1)` 仍未到，测试失败。
+
+证据在 `/tmp/ft_4block_logs/`。
+
+
+---
+
+## 9. M5：指令重叠、回滚、重试耗尽与第一阶段验收（2026-11-28）
+
+> 本节记录 `31f5f487` 候选。其中重试上限、trap 合并、§9.8 和该提交的日志目录已被 §10 订正：重试 3 次后成功（§9.4）不符合 04，trap 改为第 3 次失败；`31f5f487` 目录里同 tile tm=2 切片和 fp 重放 `test.log` 来自负对照运行（§10.6）。
+
+**代码提交**（内层仓库 `fault-tolerance-v3`）：
+
+| 提交 | 内容 |
+|---|---|
+| `b08f95ec` | RTL：去掉单在飞门控，按槽校验、按序提交、回滚和 trap |
+| `b8018b3d` | 测试：重叠/注错定向程序和 bench、按指令归属的检查器、真实 RS 的模块级夹具 |
+| `31f5f487` | 测试：RVV FT + VME FT 同开的编译组合（候选提交，回归在此提交上跑） |
+
+**原始日志**：`/home/lizeyu/eng/npu_ft/test-data/vme-ft-stage1-31f5f487/`（不入库，下文路径都相对此目录）。每个注错目标目录下有 `test.log`（整次仿真 stdout）和 `<case>.log`（该用例的 `[VME_FT_*]` 事件切片，即检查器的输入）。时间戳单位 ps，整核时钟 1250 ps/拍，`cyc=` 是 zvt_ft 内的拍号。
+
+### 9.1 实现
+
+**zvt_ft.sv（重写）**
+
+- **按槽的指令记录**：g0p0 被 block 0 接受时（`ftIssG0`），按阵列给的 2 bit 槽号记下各 block 期望组数、rob_tag、pc、tile 和尝试号。槽号按 RS 顺序分配，回滚时阵列的槽计数重装为队头槽号，所以重发的指令槽号不变。
+- **只有队头写 MT**：比较结果属于队头槽才提交（一致、有效、done=0 的元素，打一拍从 dupBuf 写入）。队头所有期望组都比较一致的那一拍 `ft_pass`。
+- **换头当拍**：后一条第一次比较（block 0、g0）最早与队头最后一次比较同拍。这一拍若队头通过，后一条的比较按新队头提交，done 掩码清零后同拍装入新队头的位。若队头在这一拍失败，后一条的比较随之作废。其余既不属于队头也不属于换头的比较（按构造不会出现）按失配处理。
+- **done 掩码**：4 block × 4 组 × 4 口 × 4 元素 = 256 bit，只属于队头，回滚保留，换头清零。失配判定只看 有效 ∧ ¬done ∧ ¬一致。
+- **回滚/trap 状态机**（从 zvt.sv 移入）：队头失败即停发 → 排空（下限 4 拍，且阵列含 skew 级空闲、提交级空）→ 一拍 `rollback`：RS 偏移清零，阵列组计数、pass、槽计数回到队头。同一队头的重试计数达到 `VME_FT_RETRY_MAX` 后再失败：发一拍 trap（带队头 rob_tag），停发直到 flush。dupBuf 中只有 p0 没有 p1 的残留由 rollback 清掉。
+- **fflags**：乘法级标志按组（该组有元素提交才计），加法级标志按元素（该元素提交才计），随队头累计，通过时交给退休侧。重放中 done 元素重新累加得到的标志不进入 fflags。
+
+**zvt_pe_array.sv / zvt_pe_block.sv**
+
+- 发射记录（槽、各 block 期望组数、tag、pc、tile）随 g0p0 交给 zvt_ft；`ftStop` 时不发射；`peCmdRdy`（RS 视图前移）只在 block 0 真正接受最后一个 p1 时有效。
+- 同 tile RAW：记录最近 `VME_FT_RAW_GAP`-1 拍的 g0p0 累加器组（`dst_index[4:3]`），命中则 g0p0 不发。`VME_FT_RAW_GAP` 默认 6（WCHK_ON 时 7），新头文件宏。
+- flush 清空 skew 级有效位、组计数、pass、槽计数。
+- block 导出本组乘法级 OF/NV 和逐元素加法级 OF/NV（按写口排布）。
+
+**zvt.sv / zvt_ctrl.sv（从上游重新应用）**
+
+- 退休：PE 指令只在首次发射时进 rtCmd（`ftRtPushEn`：在飞数等于已入队未校验数时才是首次），只在校验通过时推 mtInfo（block 0/1/2/3 按原链的 0/1/1/2 拍延迟）。`vmeRt` 在 rtCmd 队头和四份 mtInfo 都在时握手，两者一起弹出；不再有一拍脉冲去对齐记录，退休背压只推迟。PE 指令的 `vmeRt` 在 `ft_pass` 后第 4 拍。
+- misc 指令等 `ftBusy`（有未校验或未入队的 PE 指令、提交级非空、状态机非空闲）清零才执行；读写口随之归 PE。
+- flush 时清 vtzero 计数器。
+
+**rvv_backend.sv / RvvCore.sv**
+
+- RS 接线：`iss` = PE 指令发射完成，`rel` = `ft_pass`，`rollback` 来自 zvt_ft。
+- VME trap 合并进 `trap_valid_o`：RVV FT 同拍优先，每次 flush 只报一次。哨兵 opcode=STORE、bits 全 1（mtval=0xFFFFFFA7，RVV FT 是 0xFFFFFF87）。
+
+**注错与观测**（`VME_FT_INJECT_ON` / `!SYNTHESIS`）
+
+- 注入点：p0、p1、dupbuf（数据/字节使能/subtile/tile 地址位）、bskew（block 1～3 的 B skew 寄存器）、done（队头某元素的 done 位）、rs（RS 负载在发射前）、rs_mid（g0p0 之后改写 RS 表项，重放源被打坏）。
+- 定向模式 `+VME_FT_INJ_INSN=<k> +VME_FT_INJ_GRP=<g> +VME_FT_INJ_ATT=<m>`：第 k 条 PE 指令前 m 次尝试各注一次。
+- `+VME_FT_TRACE=<file>` 把 ISSUE/COMMIT/PASS/DRAIN/ROLLBACK/TRAP/FLUSH/RT_PUSH/RT_HANDSHAKE/L1_TRAP/inject 事件写入文件。COMMIT 行是**实际写入 zvt_mt 的那一拍**，带该元素所属指令的 tag 和尝试号。
+
+### 9.2 检查器（`tests/cocotb/vme_test/check_commit_uniqueness.py`）
+
+bench 在每次运行前写入每条 PE 指令的 `[VME_FT_SPEC] tile tm tn`。检查器按日志行自带的 tag/尝试号归属提交，不再归给"最近发射的指令"；每条指令应写的元素集合由 tile/tm/tn 按 tile 布局**独立算出**（不读 RTL 的地址逻辑）。判为违规：
+
+- 提交不在本指令的元素集合内（错址、串到另一条指令）；
+- 同一元素在本指令内提交两次（跨尝试也算）；
+- 来自已作废尝试的提交；
+- 更老的指令还没通过校验时写 MT；
+- 通过校验但缺元素；
+- 通过、退休不按序，或退休不止一次。
+
+`check_commit_uniqueness_test` 用本轮真实日志做合法输入，并逐项做单点变异，10 个用例全部按预期判定（`check_commit_uniqueness_test/test.log`）。其中用户点名的两种：5×7 日志里把一个 `sub=0` 改成 `sub=12`、提交总数不变（70），报 "outside its footprint" 和 "never committed"；把 insn1 的一条提交改记到 insn0，报 "outside its footprint"。
+
+### 9.3 无注错：正常重叠
+
+**不同 tile 真重叠**（`vme_ft_overlap/overlap_diff_tile.log`，16×16，tk=4，n=4）
+
+```text
+[VME_FT_ISSUE] 1090000 cyc=408 tag=4 slot=0 att=0 pc=0x3e4 tile=0 exp=4,4,4,4   insn0 g0p0
+[VME_FT_ISSUE] 1100000 cyc=416 tag=5 slot=1 att=0 pc=0x3e8 tile=4 exp=4,4,4,4   insn1 g0p0（阵列接受）
+[VME_FT_PASS]  1110000 cyc=424 tag=4 slot=0 att=0 handover_blocks=0001         insn0 通过；同拍换头
+                       cyc=425  insn1 第一次写 MT
+[VME_RT_HANDSHAKE] 1115000 cyc=428 rob_tag=4 isPe=1 RETIRED
+[VME_FT_PASS]  1120000 cyc=432 tag=5 slot=1 att=0
+[VME_RT_HANDSHAKE] 1125000 cyc=436 rob_tag=5 isPe=1 RETIRED
+```
+
+- insn1 的 g0p0 比 insn0 的 `ft_pass` 早 8 拍；insn1 的第一个 tile 写在 insn0 通过之后一拍；检查器确认 insn1 的 256 次提交都在 insn0 通过之后。
+- 两条各退休一次，按序；两块 tile 与 numpy 参考一致。
+- 吞吐：n=4 时两条 g0p0 相隔 8 拍、两次通过相隔 8 拍，即时间冗余的下限（04 §4.1 ⑦）。三条在飞（`overlap_triple.log`）：g0p0 526/534/542，通过 542/550/558。
+
+**同 tile RAW**（`vme_ft_overlap/overlap_same_tile_tm*.log`，tn=16）
+
+| tm | 组数 n | insn0 g0p0 | insn1 g0p0 | 间隔 | insn0 通过 | insn1 首次写 MT |
+|---|---|---|---|---|---|---|
+| 2 | 1 | 301 | 307 | 6 | 310 | 316 |
+| 4 | 2 | 301 | 307 | 6 | 312 | 316 |
+| 6 | 3 | 301 | 307 | 6 | 314 | 316 |
+| 16 | 4 | 301 | 309 | 8 | 317 | 318 |
+
+间隔 = max(6, 2n)，n≤3 时由 RAW 检查扣到 6；数值都正确。
+
+**官方程序对照**（`vme_test_ft_dispatch_interval/`，`vme_mset_vtmmu_sequence_test`，两条 vtmmu 写 mt0，tm=4）：
+
+| 版本 | 第一条 g0p0 | 第二条 g0p0 | 间隔 | 读回 |
+|---|---|---|---|---|
+| `84028c04`（单在飞，`baseline_84028c04.test.log`） | 246250 | 261250 | 12 拍 | 16×18 |
+| `31f5f487`（`test.log`） | 246250 | 253750 | 6 拍 | 16×18 |
+
+**形状**（`vme_ft_overlap/shape_*.log`，不同 tile 和同 tile 各 17 种）：(tm,tn,tk) = (1,1,1) (2,16,4) (3,5,2) (4,8,3) (5,7,3) (6,16,1) (7,9,4) (8,8,2) (9,16,4) (10,3,2) (11,11,3) (12,10,4) (13,15,1) (14,8,4) (15,9,2) (16,16,4) (16,1,3)，覆盖组数 1～4、tm=9～14 各 block 组数不同、tm≤8 或 tn≤8 的空闲 block、行列不满。全部数值正确、无失配；不同 tile 时 insn1 的 g0p0 在 insn0 的 g0p0 后 2n 拍（无 RAW 等待），都早于 insn0 通过。
+
+**浮点**（`vme_ft_overlap/overlap_fp_*.log`）：insn1 的一个元素上溢，fflags=0x4（OF）、无 NV；无异常的一对 fflags=0。
+
+### 9.4 注错
+
+**老错年轻在飞**（`vme_ft_inj_old_young/inj_old_young.log`；注在 insn0 最后一组 block 3 g3 的 p1）
+
+```text
+cyc=408 ISSUE tag=4 att=0            insn0
+cyc=416 ISSUE tag=5 att=0            insn1 已发射
+cyc=424 inject site=p1 blk=3 grp=3 tag=4 att=0
+cyc=424 DRAIN head_tag=4 retry=0 cause=mismatch
+cyc=434 ROLLBACK head_tag=4 retry=0 squashed_slots=0010     insn1（槽 1）作废
+cyc=435 ISSUE tag=4 att=1            按序重发
+cyc=443 ISSUE tag=5 att=1
+cyc=451 PASS tag=4 att=1   cyc=455 RETIRED rob_tag=4
+cyc=459 PASS tag=5 att=1   cyc=463 RETIRED rob_tag=5
+```
+
+insn0 尝试 0 提交 255 个元素、重发只补那 1 个（256 个各一次，无重复写）；insn1 的提交全部来自尝试 1；两块 tile 正确。
+
+**换头当拍年轻出错**（`vme_ft_inj_young/inj_young.log`）：cyc=424 insn0 通过的同一拍 insn1 第一次比较被注错，insn1 成为失败的新队头；insn0 照常在 428 退休；insn1 在 434 回滚（无更年轻的可作废）、435 重发、451 通过、455 退休。
+
+**允许范围内重试成功**（`vme_ft_inj_retry_ok/inj_retry_ok.log`；insn0 前 3 次尝试各注一次）：DRAIN/ROLLBACK 在 416/427、436/447、456/467，retry=0/1/2，每次 insn1 都随之作废重发；第 4 次尝试（att=3）在 484 通过、488 退休，insn1 在 492 通过、496 退休，数值正确，无 trap。
+
+**重试耗尽 trap**（`vme_ft_inj_trap/inj_trap.log`；insn0 前 4 次尝试都注）
+
+```text
+cyc=416/436/456 DRAIN + 427/447/467 ROLLBACK retry=0/1/2
+cyc=476 inject att=3 -> DRAIN head_tag=4 retry=3
+[VME_FT_L1_TRAP] 1188750 trap_valid_o=1 rob_tag=4 opcode=1 bits=0x1ffffff source=vme_ft
+[VME_FT_TRAP]    1188750 cyc=487 tag=4 retry=3
+[VME_FT_FLUSH]   1191250 cyc=489 state=3 active_slots=0011   标量侧取 trap 后冲刷
+```
+
+L1 的 `trap_valid_o` 带出 insn0 的 rob_tag=4，哨兵 STORE/全 1；insn0、insn1 都未通过、未退休。RVV FT 同开的构建上同一用例结果相同（`vme_ft_inj_trap_rvvft/`）。
+
+**其他注入点**
+
+| 注入 | 目标 | 结果 |
+|---|---|---|
+| B skew（block 1，第 3 个命令） | `vme_ft_inj_bskew` | 检测（block 1 g1 失配）、回滚、结果正确 |
+| dupBuf 数据位 | `vme_ft_inj_dupbuf` | 检测、回滚、结果正确 |
+| dupBuf subtile 地址位 | `vme_ft_inj_dupbuf_addr` | 检测、回滚、结果正确 |
+| fp：C 接近上限，重放中 done 元素再累加会上溢 | `vme_ft_inj_fp_replay` | 1 次回滚，结果 3.0e38，fflags=0（与无注错一致） |
+| 对照：done 位提前置 1 | `vme_ft_inj_done` | 未检测；该元素未写、保留旧值（SDC），只有检查器报 "never committed" |
+| 对照：RS 负载发射前翻位 | `vme_ft_inj_rs` | 未检测；tile 0 第 0 行错（SDC），tile 1 正确 |
+| 对照：g0p0 后改写 RS 表项 | `vme_ft_inj_rs_mid` | 检测一次、回滚，重放读到坏表项，第 0 行错（SDC）——第二阶段 RS 奇偶要补的洞 |
+
+**模块级**（真实 `zvt_ft_rs` + `zvt`）
+
+- 排空中外部 flush（`zvt_ft_unit_flush/`）：A 最后一组失配、B 在飞，DRAIN 中 flush；之后状态机空闲，RS、rtCmd、mtInfo 全空，60 拍内无 tile 写、无退休；新指令 C 提交 256 个元素各一次、退休一次。
+- 退休背压（`zvt_ft_unit_backpressure/`）：`vmeRtRdy` 一直为 0，A 通过、B 失配回滚后通过，rtCmd 和 mtInfo 各恰 2 项、0 次退休；释放后 A、B 依次各退休一次，B 是最后一条、后面没有指令也能独立退休。
+- 四 block 缺组（`zvt_precise_completion_test/`）：[4,4,2,2] 11 组到齐后空窗 30 拍不完成，(3,1) 只有 p0 时不完成，p1 比较当拍完成一次；tm=11 tn=11 单块用例同样通过。
+
+### 9.5 负对照与回归
+
+**RTL 变异**（`neg/`，每项改一处、跑对应目标、恢复）：
+
+| 变异 | 目标 | 结果 |
+|---|---|---|
+| 加法级标志不按提交过滤 | `vme_ft_inj_fp_replay` | 失败：spurious fflags 0x4 |
+| `VME_FT_RAW_GAP` 6→4 | `vme_ft_overlap` | 失败：同 tile tm=2 有 32 个元素错 |
+| 提交不看 done 掩码 | `vme_ft_inj_old_young` | 失败：检查器报 "committed twice" |
+
+**RS 单元测试**（`rs_unit/`，VCS，带参考模型）：DEPTH=8/12/16 × seed 1～5 全部 PASS；DEPTH=12 seed 1 的统计与 M1 完全相同（push 187640、iss 47478、rel 40658、rollback 4293、clear 1014、max_off=12）。
+
+**候选提交 `31f5f487` 回归**（`--nocache_test_results`，`final_regression_31f5f487.txt`）：24/24 通过。
+
+| 编译组合（04 §4.3） | 目标 | 结果 |
+|---|---|---|
+| 1 不定义 VME_FT_ON | `vme_test_verilator`、`vme_rvvi_retire_test_verilator` | PASS（21 用例） |
+| 2 VME_FT_ON | `vme_test_ft_verilator`、`vme_ft_overlap_verilator`、`vme_test_ft_dispatch_interval_verilator` | PASS |
+| 3 + INJECT | `vme_test_ft_inject_verilator`（不注错）、11 个 `vme_ft_inj_*`、`zvt_ft_unit_*`、`zvt_precise_completion_test` | PASS |
+| 4 RS_DEPTH=8 | `vme_test_ft_d8_verilator` | PASS |
+| 6 + RVV_FT_ON | `vme_test_ft_rvvft_verilator`、`vme_ft_inj_trap_rvvft_verilator` | PASS |
+| — | `check_commit_uniqueness_test` | PASS |
+
+M2 时预期失败的 `vme_test_ft_inj_p0/p1`（manual）现在各检测 1 次、回滚 1 次后通过；`vme_test_ft_inj_mset_seq`：1 次回滚，commit_bytes=128，读回 16×18。
+
+### 9.6 已知限制与遗留
+
+1. **丢副本无看门狗**：若故障使某组的 p1 整个消失（写使能全 0），队头一直等，不会 trap。04 §6.4 已把看门狗列为 05 不做。
+2. **orphan / protocol 两条兜底路径**按构造不可达，注错没有打到；它们只把异常转成回滚。
+3. **`ft_pass` 是组合路径**：比较 → 完整性 → 换头/提交使能/RS 释放，时序留给 06（04 §6.5 风险 1）。
+4. **RETRY_MAX=0、VCS 整核仿真没有单独跑**。
+5. **RVVI**：PE 指令退休记录里的 `status` 在 VME_FT_ON 下为 0（fflags 走 fcsr 通路是对的），只影响 VmeCoreMiniVerificationAxi 上的 cosim，属 04 已延后的 RVVI 对齐。
+6. **lint**：本机没有 yapf3/buildifier，`utils/run_linters.sh` 的 Python/BUILD 格式检查没跑；`hdl/verilog/rvv/` 不在 verible 范围内。
+7. 内层工作区里 `tests/cocotb/coralnpu_dv/BUILD` 的改动和若干未跟踪文件是更早会话留下的，本轮没有动也没有提交。
+
+### 9.7 复现
+
+```bash
+cd /home/lizeyu/eng/npu_ft/coralnpu   # 31f5f487
+bazel test //tests/cocotb/vme_test:vme_ft_stage1          # 重叠 + 11 个注错目标
+bazel test //tests/cocotb/vme_test:zvt_ft_unit_flush //tests/cocotb/vme_test:zvt_ft_unit_backpressure \
+           //tests/cocotb/vme_test:zvt_precise_completion_test //tests/cocotb/vme_test:check_commit_uniqueness_test
+bazel test //tests/cocotb/vme_test:vme_test_verilator //tests/cocotb/vme_test:vme_test_ft_verilator \
+           //tests/cocotb/vme_test:vme_test_ft_d8_verilator //tests/cocotb/vme_test:vme_test_ft_inject_verilator \
+           //tests/cocotb/vme_test:vme_test_ft_rvvft_verilator //tests/cocotb/vme_test:vme_ft_inj_trap_rvvft_verilator
+# 单个用例的事件切片
+ls bazel-testlogs/tests/cocotb/vme_test/vme_ft_inj_trap_verilator/test.outputs/
+python3 tests/cocotb/vme_test/check_commit_uniqueness.py <slice.log> --require-retire
+```
+
+### 9.8 §6.3 验收简表
+
+| §6.3 项 | 测试目标 | 退出 | 证明结论的原始日志 |
+|---|---|---|---|
+| a) 不定义 VME_FT_ON 与上游一致 | `vme_test_verilator`、`vme_rvvi_retire_test_verilator` | PASS | `vme_test/`、`vme_rvvi_retire_test/` |
+| b) vme_test 全过（FT 开） | `vme_test_ft_verilator`、`vme_test_ft_d8_verilator`、`vme_test_ft_inject_verilator` | PASS | `vme_test_ft/`、`vme_test_ft_d8/`、`vme_test_ft_inject/` |
+| b) 不同 tile 连发（真重叠） | `vme_ft_overlap_verilator` diff_tile、triple | PASS | `vme_ft_overlap/overlap_diff_tile.log`、`overlap_triple.log` |
+| b) 同 tile 连发（RAW ≥6） | `vme_ft_overlap_verilator` same_tile；`vme_test_ft_dispatch_interval_verilator` | PASS | `vme_ft_overlap/overlap_same_tile_tm{2,4,6,16}.log`；`vme_test_ft_dispatch_interval/{test,baseline_84028c04.test}.log` |
+| b) n=1～4、tm=9～14、tn≤8、行列不满 | `vme_ft_overlap_verilator` shapes（34 次运行） | PASS | `vme_ft_overlap/shape_*.log` |
+| b) 带浮点异常 | `vme_ft_overlap_verilator` fp | PASS | `vme_ft_overlap/overlap_fp_of.log`、`overlap_fp_clean.log` |
+| c) p0/p1 翻位：检测、回滚、结果正确 | `vme_ft_inj_old_young`、`vme_ft_inj_young`、`vme_test_ft_inj_p0/p1`、`vme_test_ft_inj_mset_seq` | PASS | `vme_ft_inj_old_young/inj_old_young.log` 等 |
+| c) 前一条出错时后一条在飞 | `vme_ft_inj_old_young_verilator` | PASS | `vme_ft_inj_old_young/inj_old_young.log` |
+| c) 回滚中再次出错（重试内成功） | `vme_ft_inj_retry_ok_verilator` | PASS | `vme_ft_inj_retry_ok/inj_retry_ok.log` |
+| c) 持续注错：重试耗尽、trap、rob_tag | `vme_ft_inj_trap_verilator`、`vme_ft_inj_trap_rvvft_verilator` | PASS | `vme_ft_inj_trap/inj_trap.log`（L1_TRAP rob_tag=4） |
+| c) 回滚期间外部 flush | `zvt_ft_unit_flush` | PASS | `zvt_ft_unit_flush/test.log`、`zvt_ft_unit_trace.log` |
+| c) B skew、dupBuf 翻位：检测 | `vme_ft_inj_bskew`、`vme_ft_inj_dupbuf`、`vme_ft_inj_dupbuf_addr` | PASS | 对应目录 `inj_*.log` |
+| c) 对照：done 掩码翻位预期漏检 | `vme_ft_inj_done_verilator` | PASS（判定 SDC） | `vme_ft_inj_done/inj_done.log` |
+| c) 对照：RS 负载翻位、p0/p1 之间改 RS | `vme_ft_inj_rs`、`vme_ft_inj_rs_mid` | PASS（判定 SDC） | `vme_ft_inj_rs/inj_rs.log`、`vme_ft_inj_rs_mid/inj_rs_mid.log` |
+| d) 专用 RS 单元测试（参考模型、随机） | `zvt_ft_rs_tb.sv`（VCS，DEPTH 8/12/16 × 5 seed） | PASS | `rs_unit/run_*.log` |
+| e) trap 只在 L1 观测 | 同 c) 持续注错 | PASS | `vme_ft_inj_trap/inj_trap.log` |
+| 补充：退休背压下保护老记录、最后一条独立退休 | `zvt_ft_unit_backpressure` | PASS | `zvt_ft_unit_backpressure/test.log` |
+| 补充：四 block 缺组判定 | `zvt_precise_completion_test` | PASS | `zvt_precise_completion_test/test.log` |
+| 补充：提交归属/错址/重复的检查器 | `check_commit_uniqueness_test` | PASS | `check_commit_uniqueness_test/test.log` |
+| 补充：fp 重放不报 done 元素标志 | `vme_ft_inj_fp_replay_verilator` | PASS | `vme_ft_inj_fp_replay/inj_fp_replay.log` |
+| 负对照：标志不过滤 / RAW=4 / 不看 done | 同上三个目标 | 均 FAIL（预期） | `neg/` |
+
+## 10. 第一阶段签收收尾：L1 trap 次序、flush 后退休记录、重试边界、归档（2026-11-29）
+
+**代码提交**（内层仓库 `fault-tolerance-v3`，在 `31f5f487` 之上）：
+
+| 提交 | 内容 |
+|---|---|
+| `70170f44` | RTL：重试上限按 04、flush 后退休有效链清零、trap 合并抽成 `rvv_core_ft_trap_arb` |
+| `ed5cd672` | 测试：重试边界与 `RETRY_MAX=0`、trap 先后次序、flush 扫描、trap 合并单元测试（**签收提交**） |
+
+**原始日志**：`/home/lizeyu/eng/npu_ft/test-data/vme-ft-stage1-ed5cd672/`（不入库，下文路径相对此目录）。全部来自 `ed5cd672` 上同一次 `bazel test --nocache_test_results`（`run_head.txt`：HEAD 与运行时间；`final_regression_ed5cd672.txt`：bazel 汇总）。每个目标一个目录，分 shard 的目标保留 `shard_k_of_n/`；`test.log` 是整次仿真输出，`test.outputs/<case>.log` 是该用例的 `[VME_FT_*]` 事件切片。负对照单放 `neg/<变异名>/`（`mutation.diff` + 该次运行的日志），修复前的复现单放 `prefix_repro/`，沿用的 RS 随机验证放 `rs_unit_from_31f5f487/`。
+
+### 10.1 L1 trap 次序（`RvvCore.sv`）
+
+**问题**：原合并用一个 `ft_trap_sent`，任何源报过 trap 就屏蔽之后的 VME trap，直到 flush。前端 trap 只可能属于比 VME 里所有指令都年轻的指令，而 RetirementBuffer 按序取 trap：年轻 trap 要等老 VME 指令退休，老 VME 指令耗尽后不退休、只发一拍 trap，被屏蔽后双方都等 flush。
+
+**生产整核可达**：`RvvFrontEnd.sv:1017-1030` 的动态合法性（寄存器对齐等）只在前端检查，标量 `Decode.scala:1108-1130` 只查 vstart、vill、mstatus.MS。`vme_ft_overlap_test.cc` 的 `ov_trap_fe`：`vtmmu mt0` 后接 `divu`，再接 `vwaddu.vx v3, v12, a1`（e8/m1 下宽化目的需偶数），`a1` 依赖除法结果，约 30 拍后到达前端，正好落在 vtmmu 的重试窗口里。
+
+**修复前复现**（`prefix_repro/trap_fe_att4_old.test.log`，旧 RTL，注 4 次以便在旧上限下耗尽）：
+
+```text
+[VME_FT_DRAIN]   991250 cyc=329 head_tag=11 head_att=1 retry=1 cause=mismatch
+[VME_FT_L1_TRAP] 998750 trap_valid_o=1 rob_tag=13 opcode=2 bits=0x1858bc3 source=frontend   年轻 vwaddu
+[VME_FT_TRAP]   1051250 cyc=377 tag=11 retry=3                                              老 vtmmu 耗尽
+（此后无 VME 的 L1_TRAP、无 VME_FT_FLUSH，仿真跑满 20000 拍超时）
+```
+
+**修复**：`rvv_core_ft_trap_arb`（`RvvCore.sv` 末尾）。VME 脉冲只被同拍的 RVV FT trap 推迟（挂起，下一拍没有 RVV FT trap 时发出，tag 锁存）；已发出的其他 trap 不再屏蔽它；VME trap 每次 flush 至多一次，flush 当拍的脉冲丢弃（属于被冲刷的工作）。同拍优先级 RVV FT > VME FT > 前端不变（04 §5.4）。仅 `RVV_FT_ON` 时 VME 输入恒 0，输出与原来 `ft | fe` 相同。
+
+**修复后**（`vme_ft_inj_trap_fe/test.outputs/inj_trap_fe.log`；RVV FT 同开的 `vme_ft_inj_trap_fe_rvvft/` 逐行相同）：
+
+```text
+[VME_FT_ISSUE]    957500 cyc=302 tag=11 att=0
+[VME_FT_DRAIN]    967500 cyc=310 head_tag=11 retry=0 cause=mismatch
+[VME_FT_ROLLBACK] 980000 cyc=320 head_tag=11 retry=0
+[VME_FT_DRAIN]    991250 cyc=329 head_tag=11 retry=1 cause=mismatch
+[VME_FT_L1_TRAP]  998750 trap_valid_o=1 rob_tag=13 opcode=2 bits=0x1858bc3 source=frontend
+[VME_FT_ROLLBACK] 1003750 cyc=339 head_tag=11 retry=1
+[VME_FT_ISSUE]    1005000 cyc=340 tag=11 att=2
+[VME_FT_DRAIN]    1015000 cyc=348 head_tag=11 retry=2 cause=mismatch
+[VME_FT_L1_TRAP]  1027500 trap_valid_o=1 rob_tag=11 opcode=1 bits=0x1ffffff source=vme_ft
+[VME_FT_TRAP]     1027500 cyc=358 tag=11 retry=2
+[VME_FT_FLUSH]    1030000 cyc=360 state=3 active_slots=0001
+```
+
+年轻指令 rob_tag=13 的前端 trap 先到 L1，老指令 rob_tag=11 耗尽当拍以自己的 tag 报到 L1 一次，2 拍后 flush；L1 共 2 条 trap、无重复。
+
+**单元测试**（`rvv_core_ft_trap_arb_test/test.log`）：逐拍检查与实现无关的三条性质（同拍优先级；未被 flush 的 VME 脉冲在首个无 RVV FT trap 的拍上以自己的 tag 和哨兵报出；两次 flush 间至多一次、flush 当拍不报）。定向 9 种次序（前端先 20 拍后 VME、RVV FT 与 VME 同拍、RVV FT 连续 3 拍压住 VME、VME 与前端同拍、VME 两次、flush 当拍脉冲、挂起中遇 flush 等）全过；随机 81813 拍、3181 个 VME 脉冲、6512 个 RVV FT、5740 个前端 trap，全过。
+
+### 10.2 flush 后退休记录（`zvt.sv`、`zvt_ft.sv`）
+
+**问题**：PE 的退休记录在 `ft_pass` 后经 `blkRtVld[0]`→`[1]/[2]`→`[3]` 分 3 拍推入四个 mtInfo FIFO。FIFO 只在 flush 当拍清，链上的有效位不清，所以 flush 打在 pass 后 0～2 拍时，残余记录在 flush 后入队，与下一条指令的 rtCmd 配对。
+
+**修复**（只在 `VME_FT_ON` 下）：`blkRtVld`、`miscRtVldD1` 改为随 flush 清零的寄存器；`ft_pass_o` 在 flush 当拍屏蔽（不释放 RS、不启动记录）；flush 当拍不握手。非 FT 构建不变。
+
+**测试**（`zvt_ft_unit_backpressure/`，真实 `zvt_ft_rs` + `zvt`）：`zvt_ft_unit_flush_retire_sweep_test` 中 A（tag 3）、B（tag 5）在飞，单拍 flush 打在 A 的 `pass_now` 同拍（k=0）和其后 k=1～4 拍（`vmeRtRdy=1`）、k=0～4、6 拍（`vmeRtRdy=0` 背压），共 11 个点。夹具每拍快照 `rtCmdRs` 和四个 `mtInfoRs` 的**真实 `entry_count`**、入队、`blkRtVld` 和退休握手。要求 flush 后到 C 入队前没有任何入队且全部占用为 0，A、B 都不退休；随后 C（tag 9）在自己的 `ft_pass` 前退休 0 次、之后恰好 1 次，256 个元素各提交一次。同一仿真先跑原有的 `zvt_ft_unit_backpressure_test`（A 过、B 失配内部回滚，`vmeRtRdy` 一直为 0），实测真实占用 `rtCmd=2 mtInfo[0..3]=[2,2,2,2]`，0 次退休，释放后 A、B 依次各退休一次：内部回滚仍保住老记录。
+
+修复前（`prefix_repro/unit_sweep_old.test.log`，k=0）：
+
+```text
+cyc=25 blkRtVld=0001 mtInfo_push=0001 ...   flush 之后 A 的记录仍在入队
+cyc=56 mtInfo_cnt=1,1,1,1 rtCmd_cnt=1 rt_hs=1 rt_tag=9   C 在自己 pass（cyc=64）之前退休
+```
+
+k=1、k=2 各残留 3 份、1 份记录（`mtInfo_cnt=0,1,1,1`、`0,0,0,1`），四个 FIFO 错位。
+
+修复后（`zvt_ft_unit_backpressure/test.log`，k=1、背压）：
+
+```text
+cyc=24 flush=0 pass_now=1 ft_pass=1 blkRtVld=0000 mtInfo_cnt=0,0,0,0 rtCmd_cnt=2
+cyc=25 flush=1 pass_now=0 ft_pass=0 blkRtVld=0001 mtInfo_push=0001 mtInfo_cnt=0,0,0,0 rtCmd_cnt=2
+cyc=26 flush=0 blkRtVld=0000 mtInfo_push=0000 mtInfo_cnt=0,0,0,0 rtCmd_cnt=0 rt_hs=0
+C: rtCmd push cyc=56 pass cyc=65 retire cyc=[69] tags=[9]
+```
+
+（cyc=25 的入队与 flush 同拍，被 FIFO 的 clear 吃掉。）11 个点全部 OK。负对照 `neg/retire_chain_no_flush_clear/` 只去掉链的清零：k=1、k=2 失败，k=0 仍过（由 `ft_pass` 屏蔽覆盖），两处改动各有用例能区分。
+
+`zvt_ft_unit_flush/`（DRAIN 中 flush）在新夹具下改读真实占用，结论不变：cyc=29 flush，状态、RS、rtCmd、mtInfo 全空，C 提交 256 个元素、退休一次。
+
+### 10.3 重试边界（`zvt_ft.sv`）
+
+**问题**：04 §4.1 第 4 条、§5.2 要求同一条连续失败 `VME_FT_RETRY_MAX` 次（默认 3）后报 trap。`31f5f487` 在第 4 次失败才 trap，§9.4 的 retry_ok（3 次失败、第 4 次通过）和 trap（4 次失败）都按这个错的边界写成了通过条件。
+
+**修复**：`retry_left = retry_cnt + 1 < RETRY_MAX`，第 RETRY_MAX 次失败报 trap，最多发射 RETRY_MAX 次；`RETRY_MAX=0` 与 1 相同，首次失败即 trap。`[VME_FT_CFG]` 行记下编译期的 RETRY_MAX，bench 从这里读，不再写死。注错改为 retry_ok `ATT=2`、trap `ATT=3`、max0 `ATT=1`。
+
+**MAX=3，前两次失败、第三次成功**（`vme_ft_inj_retry_ok/test.outputs/inj_retry_ok.log`）：
+
+```text
+ISSUE cyc=408 tag=4 att=0 / cyc=416 tag=5 att=0
+MISMATCH cyc=416 tag=4 att=0 blk=0 grp=0 ... db=0x6823afe7 pe=0x6823afe6
+DRAIN cyc=416 head_tag=4 retry=0      ROLLBACK cyc=427 retry=0 squashed_slots=0010
+ISSUE cyc=428 tag=4 att=1 / cyc=436 tag=5 att=1
+MISMATCH cyc=436 tag=4 att=1          DRAIN cyc=436 retry=1    ROLLBACK cyc=447 retry=1
+ISSUE cyc=448 tag=4 att=2 / cyc=456 tag=5 att=2
+PASS cyc=464 tag=4 att=2   RT_HANDSHAKE cyc=468 rob_tag=4 RETIRED
+PASS cyc=472 tag=5 att=2   RT_HANDSHAKE cyc=476 rob_tag=5 RETIRED
+```
+
+无 TRAP、无 L1_TRAP，两块 tile 与 numpy 参考一致。
+
+**MAX=3，三次都失败**（`vme_ft_inj_trap/test.outputs/inj_trap.log`）：
+
+```text
+ISSUE att=0 (408/416)  MISMATCH+DRAIN cyc=416 retry=0  ROLLBACK cyc=427 retry=0
+ISSUE att=1 (428/436)  MISMATCH+DRAIN cyc=436 retry=1  ROLLBACK cyc=447 retry=1
+ISSUE att=2 (448/456)  MISMATCH+DRAIN cyc=456 retry=2
+[VME_FT_L1_TRAP] 1163750 trap_valid_o=1 rob_tag=4 opcode=1 bits=0x1ffffff source=vme_ft
+[VME_FT_TRAP]    1163750 cyc=467 tag=4 retry=2
+[VME_FT_FLUSH]   1166250 cyc=469 state=3 active_slots=0011
+```
+
+发射记录只有 att 0、1、2，没有第 4 次尝试；3 次 DRAIN、2 次 ROLLBACK、1 次 L1 trap（rob_tag=4）。RVV FT 同开（`vme_ft_inj_trap_rvvft/`）逐行相同。
+
+**MAX=0，单独编译**（`vme_core_mini_axi_ft_max0_model`，`vme_ft_inj_trap_max0/test.outputs/inj_trap.log`，`[VME_FT_CFG] 0 retry_max=0`）：
+
+```text
+ISSUE cyc=408 tag=4 att=0 / cyc=416 tag=5 att=0
+MISMATCH+DRAIN cyc=416 head_tag=4 retry=0
+[VME_FT_L1_TRAP] 1113750 trap_valid_o=1 rob_tag=4 opcode=1 bits=0x1ffffff source=vme_ft
+[VME_FT_TRAP]    1113750 cyc=427 tag=4 retry=0
+[VME_FT_FLUSH]   1116250 cyc=429 state=3 active_slots=0011
+```
+
+0 次 ROLLBACK、0 次重发。cyc=416 insn1 的 g0p0 与 insn0 失配同拍被接受（停发从下一拍起），测试判据是"最后一次发射不晚于最后一次 DRAIN"。
+
+### 10.4 与 04 的差异：失配即开始恢复
+
+04 §4.1 第 4 条写"只在最老那条的校验点触发，不在第一次失配时触发"。实现是**队头（或换头当拍的新队头）任一组比较失配即停发、进入排空**，不等它的最后一组。
+
+- **对提交**：队头之外的指令不写 MT（只有队头提交，§9.1），所以提前恢复不会让年轻指令的结果落地；队头本次已一致的元素照常提交并置 done，失配之后的组不再比较，重发时补齐。
+- **对恢复**：重发从队头开始，done 掩码挡住已提交的元素，年轻指令整体作废重做，和等到校验点再恢复的结果相同，只是少等几拍（失配在第 0 组时，按 n=4 的发射节奏估计每次约早 8 拍；未实测"等校验点"的版本）。
+- **对 trap**：重试计数按"一次失败一次计数"，与触发时刻无关。
+- **验证**：老错年轻在飞（失配在最后一组，等价于校验点）与失配在第 0 组（retry_ok、trap、max0）都覆盖；`vme_ft_inj_old_young` 中 insn0 两次尝试分别提交 255 个和 1 个元素、无重复，insn1 的 256 个全部来自尝试 1；负对照 `neg/no_done_mask/` 去掉 done 掩码后检查器报 "committed twice"。
+
+采用实现的行为，04 原文不改，以本节为准。
+
+### 10.5 其余 §6.3 项复核（同一提交、同一次运行）
+
+| 事实 | 原始日志 | 实测 |
+|---|---|---|
+| 不同 tile 真重叠 | `vme_ft_overlap/shard_1_of_5/test.outputs/overlap_diff_tile.log` | insn0 g0p0 cyc=408，insn1 g0p0 cyc=416，insn0 PASS cyc=424，insn1 首次写 cyc=425、PASS cyc=432 |
+| 同 tile RAW | `vme_ft_overlap/shard_2_of_5/test.outputs/overlap_same_tile_tm{2,4,6,16}.log` | g0p0 301→307 / 301→307 / 301→307 / 301→309，间隔 6/6/6/8 |
+| 三条在飞 | `vme_ft_overlap/shard_3_of_5/test.outputs/overlap_triple.log` | PASS |
+| 17 种形状 × 不同/同 tile | `vme_ft_overlap/shard_4_of_5/test.outputs/shape_*.log`（34 个） | 数值正确、无失配 |
+| 浮点 fflags | `vme_ft_overlap/shard_5_of_5/test.log` | `overlap_fp_of` fflags=0x4，`overlap_fp_clean` fflags=0x0 |
+| 浮点重放 | `vme_ft_inj_fp_replay/test.log` | 1 次回滚，值 3.0e38，fflags=0x0（判据已改为 `== 0`） |
+| 老错年轻在飞 | `vme_ft_inj_old_young/test.log` | insn0 尝试 0/1 提交 255/1 个，insn1 全部来自尝试 1，最终两块 tile 正确，按序各退休一次 |
+
+其余注错（young、bskew、dupbuf、dupbuf_addr、done/rs/rs_mid 对照）、`zvt_precise_completion_test`、`check_commit_uniqueness_test` 都在同一次运行里通过，结论同 §9.4、§9.5。
+
+**沿用**：专用 RS 单元测试（04 §6.3 d）沿用 `31f5f487` 的 VCS 运行，日志复制在 `rs_unit_from_31f5f487/`（DEPTH 8/12/16 × seed 1～5，15 个 PASS）。`git diff 31f5f487 ed5cd672 -- hdl/verilog/rvv/design/Zvt/zvt_ft_rs.sv` 为空，`zvt_ft_rs_tb.sv` 也未动。
+
+### 10.6 归档订正
+
+`31f5f487` 目录里有两处混入了负对照（文件未删，以本节为准）：
+
+- `vme_ft_overlap/overlap_same_tile_tm2.log` 的两条 ISSUE 是 cyc=301、305（间隔 4），来自 `VME_FT_RAW_GAP=4` 变异的运行；目录里也只有 tm2 的同 tile 切片。§9.3 表格里的 6 拍当时取自 bench 输出，切片被后来的负对照覆盖。
+- `vme_ft_inj_fp_replay/test.log` 与 `neg/flags_unmasked.test.log` 逐字节相同（`cmp` 无差异），即正例目录放的是负对照日志。
+
+原因是负对照跑完后再从 `bazel-testlogs` 收集正例。本轮改为：正例回归跑完立即用脚本按目标复制（含各 shard 的 `test.log` 和 `test.outputs/`），再跑负对照，每个负对照把自己的日志收进 `neg/<名>/`；上表各项都是从 `ed5cd672` 目录逐个打开核对的。
+
+### 10.7 负对照（`neg/`，在 `ed5cd672` 上每项改一处 RTL、跑对应目标、`git checkout` 恢复）
+
+| 变异 | 目标 | 结果 |
+|---|---|---|
+| `retry_bound_old`：恢复 `retry_cnt < RETRY_MAX` | `vme_ft_inj_trap` | 失败：第 4 次尝试通过、两条都退休，无 trap |
+| `retire_chain_no_flush_clear`：退休有效链不随 flush 清 | `zvt_ft_unit_backpressure` | 失败：k=1、k=2 的 flush 后残留记录（两种 `vmeRtRdy`） |
+| `trap_arb_any_trap_blocks`：任何 trap 都置 `vme_sent` | `vme_ft_inj_trap_fe`、`rvv_core_ft_trap_arb_test` | 失败：整核 "0 VME traps at L1 … flushes 0"；单元 "trap_valid wrong"（前端 trap 之后的 VME 脉冲没报） |
+| `flags_unmasked`：加法级标志不按提交过滤 | `vme_ft_inj_fp_replay` | 失败：spurious fflags 0x4 |
+| `raw_gap_4`：`VME_FT_RAW_GAP` 6→4 | `vme_ft_overlap` | 失败：同 tile tm=2 有 32 个元素错 |
+| `no_done_mask`：提交不看 done 掩码 | `vme_ft_inj_old_young` | 失败：committed twice |
+
+修复前在旧 RTL 上的复现单放在 `prefix_repro/`：`trap_att3_old.test.log`（注 3 次，旧上限下第 4 次通过）、`trap_fe_att4_old.test.log`（§10.1 卡死）、`unit_sweep_old.test.log`（§10.2）。
+
+### 10.8 签收回归与 §6.3 简表
+
+`ed5cd672` 上 33 个目标一次运行，33/33 通过（`final_regression_ed5cd672.txt`）。工作区另有早先会话留下的 `tests/cocotb/coralnpu_dv/BUILD` 改动，不在这些目标的依赖里。
+
+| §6.3 项 | 测试目标 | 实际结果 | 原始日志 |
+|---|---|---|---|
+| a) 不定义 VME_FT_ON 与上游一致 | `vme_test_verilator`、`vme_rvvi_retire_test_verilator` | PASS | `vme_test/shard_*`、`vme_rvvi_retire_test/` |
+| b) vme_test 全过（FT 开） | `vme_test_ft`、`vme_test_ft_d8`（RS=8）、`vme_test_ft_inject`、`vme_test_ft_rvvft` | PASS | 对应目录 `shard_*` |
+| b) 不同 tile 连发、三条在飞 | `vme_ft_overlap` diff_tile、triple | PASS：408/416 发射，424 通过 | `vme_ft_overlap/shard_1_of_5/`、`shard_3_of_5/` |
+| b) 同 tile 连发 | `vme_ft_overlap` same_tile；`vme_test_ft_dispatch_interval` | PASS：6/6/6/8 拍 | `vme_ft_overlap/shard_2_of_5/test.outputs/`、`vme_test_ft_dispatch_interval/` |
+| b) n=1～4、tm=9～14、tn≤8、行列不满 | `vme_ft_overlap` shapes | PASS（34 次） | `vme_ft_overlap/shard_4_of_5/test.outputs/shape_*.log` |
+| b) 浮点异常 | `vme_ft_overlap` fp | PASS：0x4 / 0x0 | `vme_ft_overlap/shard_5_of_5/` |
+| c) p0/p1 翻位：检测、回滚、正确 | `vme_ft_inj_old_young`、`vme_ft_inj_young`、`vme_test_ft_inj_p0/p1`、`vme_test_ft_inj_mset_seq` | PASS | 对应目录 |
+| c) 前一条错时后一条在飞 | `vme_ft_inj_old_young` | PASS：255+1 提交，insn1 全部重做 | `vme_ft_inj_old_young/` |
+| c) 回滚中再次出错（重试内成功） | `vme_ft_inj_retry_ok` | PASS：2 次回滚，att 2 通过，按序退休 | `vme_ft_inj_retry_ok/test.outputs/inj_retry_ok.log` |
+| c) 持续注错：重试耗尽、trap、rob_tag | `vme_ft_inj_trap`、`vme_ft_inj_trap_rvvft`、`vme_ft_inj_trap_max0` | PASS：第 3 次失败 trap、rob_tag=4、无第 4 次；MAX=0 首次即 trap | 对应目录 `test.outputs/inj_trap.log` |
+| c) 回滚期间外部 flush | `zvt_ft_unit_flush` | PASS | `zvt_ft_unit_flush/` |
+| c) 外部 flush 与退休记录（本轮） | `zvt_ft_unit_backpressure`（sweep + 内部回滚） | PASS：11 个点 | `zvt_ft_unit_backpressure/test.log` |
+| c) B skew、dupBuf 翻位 | `vme_ft_inj_bskew`、`vme_ft_inj_dupbuf`、`vme_ft_inj_dupbuf_addr` | PASS | 对应目录 |
+| c) 对照：done、RS 负载、p0/p1 间改 RS | `vme_ft_inj_done`、`vme_ft_inj_rs`、`vme_ft_inj_rs_mid` | PASS（判定 SDC） | 对应目录 |
+| d) 专用 RS 单元测试 | `zvt_ft_rs_tb.sv`（VCS） | PASS（沿用，源码未变） | `rs_unit_from_31f5f487/` |
+| e) trap 在 L1：trap_valid_o + rob_tag | 同 c) 持续注错；`vme_ft_inj_trap_fe`、`vme_ft_inj_trap_fe_rvvft` | PASS：年轻前端 trap 先到后，老指令仍报一次 | `vme_ft_inj_trap_fe/test.outputs/inj_trap_fe.log` |
+| e) trap 合并（同拍优先级、每次 flush 一次） | `rvv_core_ft_trap_arb_test` | PASS：定向 9 种 + 随机 81813 拍 | `rvv_core_ft_trap_arb_test/test.log` |
+| 补充：仅 RVV_FT_ON 构建（合并模块改动） | `rvv_arithmetic_ft_cocotb_test`、`rvv_arithmetic_ft_inject_cocotb_test` | PASS | `//tests/cocotb` 下同名目录 |
+| 补充：精确完成、检查器、fp 重放 | `zvt_precise_completion_test`、`check_commit_uniqueness_test`、`vme_ft_inj_fp_replay` | PASS | 对应目录 |
+| 负对照 | 见 §10.7 | 6 项均 FAIL（预期） | `neg/` |
+
+### 10.9 遗留
+
+1. §9.6 的 1～3、5 不变（无看门狗、orphan/protocol 路径未打到、`ft_pass` 组合路径时序留 06、RVVI `status`）。§9.6 第 4 条的 `RETRY_MAX=0` 已补；VCS 整核仿真仍没跑。
+2. `RETRY_MAX=0` 下没有"重试窗口"，所以 `vme_ft_inj_trap_fe` 没有 max0 版本。
+3. 非 FT 构建的退休有效链（`miscRtVldD1`、`blkRtVld`）flush 后也会残留一拍，属上游行为，本轮只在 `VME_FT_ON` 下改。
+4. lint：本机没有 verible、clang-format-19、yapf3、buildifier、mdl、shellcheck，`utils/run_linters.sh` 没跑。
+5. trap 后端到端（LSU 卡死修复）仍按 04 §5.7 延后到 06，第一阶段只在 L1 观测。
